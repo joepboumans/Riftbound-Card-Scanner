@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import CardImage from '../CardImage.jsx';
 import { getMatcher, resolveCardImageSource } from '../../lib/cardMatcher.js';
-import { resolveCardData } from '../../lib/cardData.js';
+import { fullNameOf, resolveCardData } from '../../lib/cardData.js';
 import { searchCards } from '../../lib/cardSearch.js';
 
 // "Not these, search…": pick the card for a scan the scanner did not accept.
@@ -35,9 +35,9 @@ export default function CandidateSearch({ setFilter = 'all', onPick, onClose }) 
             {results.map((card) => (
               <button key={card.id} type="button" onClick={() => onPick(resolveCardData(card))}
                 className="flex w-full items-center gap-3 rounded-lg border border-rift-600/30 bg-rift-800/60 p-2 text-left hover:border-gold-400/40 hover:bg-rift-700/70">
-                <CardImage src={resolveCardImageSource(card.imageUrl, card.id)} alt={card.name} className="h-12 w-9 shrink-0 rounded object-contain" loading="lazy" />
+                <CardImage src={resolveCardImageSource(card.imageUrl, card.id)} alt={fullNameOf(card)} className="h-12 w-9 shrink-0 rounded object-contain" loading="lazy" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-rift-100">{card.name}</span>
+                  <span className="block truncate text-sm font-medium text-rift-100">{fullNameOf(card)}</span>
                   <span className="block text-[10px] uppercase tracking-wider text-rift-400">{card.code || card.id} · {card.setName || card.set}</span>
                 </span>
               </button>
