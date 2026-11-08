@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import AppShell from './components/AppShell.jsx';
 import BottomTabBar from './components/BottomTabBar.jsx';
 import ToastNotification from './components/ToastNotification.jsx';
+import NewPrintNotice from './components/NewPrintNotice.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
 import ManualScanReview from './components/scanner/ManualScanReview.jsx';
 import CandidateSearch from './components/scanner/CandidateSearch.jsx';
@@ -15,6 +16,7 @@ import { useCamera } from './hooks/useCamera.js';
 import { useCardDetection } from './hooks/useCardDetection.js';
 import { useAutoScan } from './hooks/useAutoScan.js';
 import { useScanSound } from './hooks/useScanSound.js';
+import { useNewPrintCheck } from './hooks/useNewPrintCheck.js';
 import { downloadCSV, copyDeckList, validateForExport, EXPORT_FORMATS } from './lib/csvExporter.js';
 import { getMatcher, mergeCardDatabaseUpdate, sourceImageUrlOf } from './lib/cardMatcher.js';
 import { buildScanSetOptions, summarizeScanSetCoverage } from './lib/scanSets.js';
@@ -460,6 +462,12 @@ export default function App() {
     refreshPriceCache();
   }, [refreshPriceCache]);
 
+  const getLocalCardIds = useCallback(() => getMatcher().cards
+    .map((card) => String(card.id || '').trim())
+    .filter(Boolean), []);
+  const newPrints = useNewPrintCheck({ ready: !isLoading && !initError, getKnownIds: getLocalCardIds });
+  const refreshNewPrints = newPrints.refresh;
+
   const handleUpdateCardDatabase = useCallback(async () => {
     if (cardDatabaseBusy) {
       return;
@@ -521,6 +529,7 @@ export default function App() {
           progress: 0.98,
         });
         applyCardDatabase(getMatcher().cards);
+        refreshNewPrints();
         setUpdateTask({
           title: 'Updating card database',
           detail: 'Card database update complete.',
@@ -539,7 +548,7 @@ export default function App() {
     }
 
     cardDatabaseInputRef.current?.click();
-  }, [applyCardDatabase, cardDatabaseBusy, processCardDatabase, showNotification, yieldToPaint]);
+  }, [applyCardDatabase, cardDatabaseBusy, processCardDatabase, refreshNewPrints, showNotification, yieldToPaint]);
 
   const handleImportCardDatabase = useCallback(() => {
     cardDatabaseInputRef.current?.click();
@@ -1159,6 +1168,9 @@ export default function App() {
           confirmCandidate(candidateSearch.scan, card, { from: candidateSearch.from, rank: null });
           setCandidateSearch(null);
         }} />}
+
+      <NewPrintNotice count={newPrints.count} onUpdate={handleUpdateCardDatabase} onLater={newPrints.later}
+        disabled={priceSyncBusy || cardDatabaseBusy || appUpdateBusy} />
 
       {/* Tab content */}
       <div className="flex-1 flex flex-col min-h-0">
