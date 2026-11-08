@@ -6,6 +6,7 @@ import { recognizeCard, buildRecognitionResult, applyTextVerification, rankForRe
 import { hasLocalArtworkSupport } from '../lib/localArtwork.js';
 import { selectGuideDetection, mapDetectionBox } from '../lib/scanGeometry.js';
 import { attachScanEvidence, attachScanArtwork } from '../lib/scanEvidence.js';
+import { describeScanArtwork } from '../lib/learnedReferences.js';
 import { emitScanDiagnostic } from '../lib/scanDiagnostics.js';
 import { isScanFrameCancelled } from '../lib/scanQuality.js';
 import { CardVisualVerifier } from '../lib/cardVisualVerifier.js';
@@ -159,7 +160,8 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
       const withReviewCandidates = (result, rankCandidates) => {
         if (!options.includeReview) return null;
         result.reviewCandidates = rankCandidates();
-        attachScanArtwork(result, { crop: recognition.crop, quality });
+        attachScanArtwork(result, describeScanArtwork({ crop: recognition.crop, quality, matcher,
+          outlined: !bestDetection.detectorProposal, areaSampling: recognition.artworkSampling === 'area' }));
         return result;
       };
       if (!quality.acceptable) {
@@ -218,7 +220,8 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
           artworkAlignment: entry.artworkAlignment, similarityGap: entry.similarity - (entry.secondBestSim ?? 0),
         })) });
       result.reviewCandidates = reviewCandidatesFor(matchResult);
-      attachScanArtwork(result, { crop: recognition.crop, quality });
+      attachScanArtwork(result, describeScanArtwork({ crop: recognition.crop, quality, matcher,
+        outlined: !bestDetection.detectorProposal, areaSampling: recognition.artworkSampling === 'area' }));
       publish(result);
       if (result.matched || options.includeReview || (options.includeCandidate && (matchResult.similarity >= CANDIDATE_SIMILARITY_FLOOR || hasLocalArtworkSupport(matchResult)))) return result;
       return null;

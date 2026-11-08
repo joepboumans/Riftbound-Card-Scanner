@@ -6,7 +6,7 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { loadMatcherDatabase, saveMatcherDatabase } from './indexedDB.js';
 import { isDesktopRuntime, resolveAppUrl } from './runtime.js';
-import { describeFeatures, compareFeatures } from './cardSimilarity.js';
+import { describeFeatures, compareFeatures, MIN_STRUCTURE_NORM } from './cardSimilarity.js';
 import { areaColorGrid } from './cardFeatures.js';
 import { describeLocalArtwork, compareLocalArtwork, compareAlignedArtwork, artworkDetailScore } from './localArtwork.js';
 
@@ -218,13 +218,18 @@ class CardMatcher {
 
   rank(cropCanvas, { areaSampling = false, ...options } = {}) {
     if (!this.ready || !this.cards.length) return [];
-    return this.rankFeatures(this._computeColorGrid(this._cropArtwork(cropCanvas), { areaSampling }), options);
+    return this.rankFeatures(this.artworkFeatures(cropCanvas, { areaSampling }), options);
+  }
+
+  // The feature vector the matcher ranks for a card crop.
+  artworkFeatures(cropCanvas, { areaSampling = false } = {}) {
+    return this._computeColorGrid(this._cropArtwork(cropCanvas), { areaSampling });
   }
 
   rankFeatures(features, { setFilter, limit = 3, localStructure = false, alignLocal = true, requiredIds = null } = {}) {
     if (!this.ready) return [];
     const featureStats = describeFeatures(features);
-    if (!featureStats || featureStats.structureNorm < 1e-8) return [];
+    if (!featureStats || featureStats.structureNorm < MIN_STRUCTURE_NORM) return [];
     let ranked = [];
     const required = requiredIds && new Set(requiredIds), requested = [];
     const local = localStructure ? describeLocalArtwork(features, this.gridSize) : null;

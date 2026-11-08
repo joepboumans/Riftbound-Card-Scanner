@@ -3,6 +3,8 @@
 // pattern as well as its colors. Both use the existing RGB grid database.
 const COLOR_WEIGHT = 0.6;
 const EPSILON = 1e-8;
+// Artwork with less structure than this is too flat for the matcher to rank.
+export const MIN_STRUCTURE_NORM = EPSILON;
 
 export function describeFeatures(features) {
   const channelSums = [0, 0, 0];

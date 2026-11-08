@@ -1000,10 +1000,10 @@ export default function App() {
     }
     lastAddRef.current = { cardId: card.id, at: Date.now() };
     const entry = createUserConfirmedEntry(scan, card, { from, rank }, batchDefaultsRef.current);
+    entry.learnedReferenceId = onUserConfirmed({ entry, card: entry.cardData, from, rank, artwork: getScanArtwork(scan) || null });
     queuePendingEntry(entry);
     scanSound.playScanAccepted();
     autoScan.setLastCardId(card.id);
-    onUserConfirmed({ entry, card: entry.cardData, from, rank, artwork: getScanArtwork(scan) || null });
     return true;
   }, [queuePendingEntry, scanSound.playScanAccepted, autoScan, debugEnabled, showNotification]);
 
