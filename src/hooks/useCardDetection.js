@@ -18,7 +18,7 @@ import { hasStrongVisualProof, canReuseVisualBox } from '../lib/cardVisualProof.
  *   1. YOLO detection on a captured frame
  *   2. Card matching on detected crops (via CardMatcher)
  */
-export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, cropRefiner = null, textVerifier = null, recognitionContext = '', cameraIsActive = true } = {}) {
+export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, minSimilarityGap = 0.05, cropRefiner = null, textVerifier = null, recognitionContext = '', cameraIsActive = true } = {}) {
   const [detectorState, setDetectorState] = useState(DetectorState.UNLOADED);
   const [detectorMode, setDetectorMode] = useState('unloaded');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -27,6 +27,7 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
   const detectorRef = useRef(null);
   const busyRef = useRef(false);
   const minSimilarityRef = useRef(minSimilarity);
+  const minSimilarityGapRef = useRef(minSimilarityGap);
   const scanSetFilterRef = useRef(scanSetFilter);
   const cropRefinerRef = useRef(cropRefiner);
   const epochRef = useRef(0);
@@ -50,11 +51,12 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
   useEffect(() => {
     scanSetFilterRef.current = scanSetFilter;
     minSimilarityRef.current = minSimilarity;
+    minSimilarityGapRef.current = minSimilarityGap;
     cropRefinerRef.current = cropRefiner;
     textVerifierRef.current?.reset();
     textVerifierRef.current = textVerifier;
     epochRef.current++;
-  }, [scanSetFilter, minSimilarity, cropRefiner, textVerifier, recognitionContext, cameraIsActive]);
+  }, [scanSetFilter, minSimilarity, minSimilarityGap, cropRefiner, textVerifier, recognitionContext, cameraIsActive]);
   useEffect(() => () => { epochRef.current++; textVerifierRef.current?.reset(); visualVerifierRef.current?.dispose(); visualVerifierRef.current=null; }, []);
 
   /**
@@ -179,7 +181,8 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
         requiresTextConfirmation:recognition.requiresTextConfirmation,
         cropMethod: recognition.cropMethod, artworkSampling: recognition.artworkSampling, geometryConflict: recognition.geometryConflict, trackingFingerprint: recognition.trackingFingerprint,
         quad: recognition.refinement?.quad?.map((p) => ({ x: p.x + (frame.scanRegion?.x || 0), y: p.y + (frame.scanRegion?.y || 0) })),
-        rectificationStatus: recognition.refinement?.status || 'disabled', rectificationReason: recognition.refinement?.reason });
+        rectificationStatus: recognition.refinement?.status || 'disabled', rectificationReason: recognition.refinement?.reason },
+        { minSimilarityGap: minSimilarityGapRef.current });
       const verifier = textVerifierRef.current;
       if (verifier) {
         const filterKey = JSON.stringify(scanSetFilterRef.current);

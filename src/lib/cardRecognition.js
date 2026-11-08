@@ -80,17 +80,17 @@ export function rankForReview(crop, matcher, { setFilter } = {}) {
   return reviewCandidatesFor(matchFromRanking(matcher.rank(crop, { setFilter, limit: 3 })));
 }
 
-export function buildRecognitionResult(match, quality, minSimilarity = 0.9, base = {}) {
+export function buildRecognitionResult(match, quality, minSimilarity = 0.9, base = {}, { minSimilarityGap = MIN_SIMILARITY_GAP } = {}) {
   if (!match?.card) return { ...base, quality, matched: false, reason: 'low-similarity' };
   const threshold = Math.max(0.68, minSimilarity);
   const similarityGap = match.similarity - (match.secondBestSim ?? 0);
   const strong = match.similarity >= threshold;
-  const matched = !base.geometryConflict && quality?.acceptable === true && strong && similarityGap >= MIN_SIMILARITY_GAP;
+  const matched = !base.geometryConflict && quality?.acceptable === true && strong && similarityGap >= minSimilarityGap;
   return decide({ ...base, cardData: resolveCardData(match.card), similarity: match.similarity,
     colorSimilarity: match.colorSimilarity, structureSimilarity: match.structureSimilarity,
     localStructureSimilarity: match.localStructureSimilarity,
     alignedArtworkSimilarity: match.alignedArtworkSimilarity, artworkAlignment: match.artworkAlignment,
-    similarityGap, minSimilarity: threshold, minSimilarityGap: MIN_SIMILARITY_GAP,
+    similarityGap, minSimilarity: threshold, minSimilarityGap,
     quality, matched, timestamp: Date.now(),
     reason: matched ? null : quality?.issue || (base.geometryConflict ? 'geometry-conflict' : strong ? 'ambiguous' : 'low-similarity') }, { minSimilarity: threshold });
 }
