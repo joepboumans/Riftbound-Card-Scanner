@@ -8,6 +8,7 @@ import { loadMatcherDatabase, saveMatcherDatabase } from './indexedDB.js';
 import { isDesktopRuntime, resolveAppUrl } from './runtime.js';
 import { describeFeatures, compareFeatures } from './cardSimilarity.js';
 import { areaColorGrid } from './cardFeatures.js';
+import { withFullNames } from './cardData.js';
 import { describeLocalArtwork, compareLocalArtwork, compareAlignedArtwork, artworkDetailScore } from './localArtwork.js';
 
 const HASHES_URL = resolveAppUrl(`/card-hashes.json?v=${__BUILD_TIME__}`);
@@ -183,7 +184,7 @@ class CardMatcher {
     this.revision = (this.revision || 0) + 1;
     this._tmpCanvas = null;
     this.gridSize = database.gridSize;
-    this.cards = (database.cards || []).map((card) => {
+    this.cards = withFullNames(database.cards || []).map((card) => {
       const f = card.f instanceof Float32Array ? card.f : new Float32Array(card.f);
       return { ...card, f, featureStats: describeFeatures(f), localArtwork: describeLocalArtwork(f, this.gridSize),
         broadArtwork: describeLocalArtwork(f,this.gridSize,{radius:Math.max(1,Math.round(this.gridSize/4))}) };

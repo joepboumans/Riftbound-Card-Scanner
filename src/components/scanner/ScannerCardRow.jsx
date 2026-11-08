@@ -4,6 +4,7 @@ import { CONDITIONS, LANGUAGES, DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from 
 import { resolveCardImageSource } from '../../lib/cardMatcher.js';
 import { formatPrice, getPriceValue } from '../../lib/priceFormat.js';
 import CardImage from '../CardImage.jsx';
+import { fullNameOf } from '../../lib/cardData.js';
 
 const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onRemove, onSplit, priceRecord, priceCurrency = 'EUR', priceExchangeRates }) {
   const { cardData, quantity, condition, language, foil, promo } = card;
@@ -24,7 +25,7 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
         <div className="w-12 h-16 rounded-lg overflow-hidden bg-rift-800 border border-rift-600/30 flex-shrink-0">
           <CardImage
             src={resolveCardImageSource(cardData.imageUrl, cardData.id)}
-            alt={cardData.name}
+            alt={fullNameOf(cardData)}
             className="w-full h-full object-cover"
             loading="lazy"
           />
@@ -43,11 +44,11 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
                 {rarityStyle.label}
               </span>
               <span className="text-[10px] font-mono text-rift-500">
-                #{cardData.collectorNumber}
+                {cardData.code || `#${cardData.collectorNumber}`}
               </span>
             </div>
             <h4 className="flex-1 text-sm font-semibold text-rift-100 truncate pt-0.5">
-              {cardData.name}
+              {fullNameOf(cardData)}
             </h4>
             <button
               onClick={() => onRemove(index)}

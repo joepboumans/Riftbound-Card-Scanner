@@ -13,7 +13,7 @@ import { getMatcher } from '../../lib/cardMatcher.js';
 import { downloadCSV, validateForExport } from '../../lib/csvExporter.js';
 import { formatPrice, getPriceValue as getRecordPriceValue } from '../../lib/priceFormat.js';
 import { isFoilOnly } from '../../data/sampleCards.js';
-import { resolveCardData } from '../../lib/cardData.js';
+import { fullNameOf, resolveCardData } from '../../lib/cardData.js';
 import { createCardEntry, matchesPendingScan } from '../../lib/collection.js';
 import { getSelectedDetectionEntries } from '../../lib/scanEntries.js';
 import { searchCards } from '../../lib/cardSearch.js';
@@ -57,6 +57,8 @@ function pendingToDetection(card) {
       top3: [{
         id: card.cardData.id,
         name: card.cardData.name,
+        subtitle: card.cardData.subtitle,
+        fullName: fullNameOf(card.cardData),
         collectorNumber: card.cardData.collectorNumber,
         code: card.cardData.code,
         set: card.cardData.set,
@@ -269,9 +271,9 @@ export default function ScanTab({
                   className="flex w-full items-center justify-between gap-3 rounded-lg border border-rift-600/30 bg-rift-800/60 px-3 py-2 text-left transition-colors hover:border-gold-400/40 hover:bg-rift-700/70"
                 >
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-rift-100">{card.name}</div>
+                    <div className="truncate text-sm font-medium text-rift-100">{fullNameOf(card)}</div>
                     <div className="text-[10px] uppercase tracking-wider text-rift-400">
-                      ID {card.id} · {card.setName || card.set}
+                      {card.code || `ID ${card.id}`} · {card.setName || card.set}
                     </div>
                   </div>
                   <div className="shrink-0 rounded-full border border-rift-600/40 bg-rift-700/60 px-2 py-0.5 text-[10px] font-medium text-rift-300">
@@ -286,9 +288,9 @@ export default function ScanTab({
         <div className="mt-3 space-y-3 rounded-lg border border-rift-600/30 bg-rift-800/55 p-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-rift-100">{manualSelectedCard.name}</div>
+              <div className="truncate text-sm font-semibold text-rift-100">{fullNameOf(manualSelectedCard)}</div>
               <div className="text-[10px] uppercase tracking-wider text-rift-400">
-                ID {manualSelectedCard.id} · {manualSelectedCard.setName || manualSelectedCard.set}
+                {manualSelectedCard.code || `ID ${manualSelectedCard.id}`} · {manualSelectedCard.setName || manualSelectedCard.set}
               </div>
             </div>
             <div className="rounded-full border border-gold-400/20 bg-gold-400/10 px-2 py-0.5 text-[10px] font-medium text-gold-300">
@@ -405,7 +407,7 @@ export default function ScanTab({
       }
 
       if (pendingSort === 'name') {
-        const nameDelta = left.cardData.name.localeCompare(right.cardData.name, undefined, { sensitivity: 'base' });
+        const nameDelta = fullNameOf(left.cardData).localeCompare(fullNameOf(right.cardData), undefined, { sensitivity: 'base' });
         if (nameDelta !== 0) return nameDelta;
       }
 
@@ -424,7 +426,7 @@ export default function ScanTab({
         if (amountDelta !== 0) return amountDelta;
       }
 
-      return left.cardData.name.localeCompare(right.cardData.name, undefined, { sensitivity: 'base' });
+      return fullNameOf(left.cardData).localeCompare(fullNameOf(right.cardData), undefined, { sensitivity: 'base' });
     });
   }, [pendingCards, pendingSort, priceByCardId]);
 
@@ -943,10 +945,10 @@ export default function ScanTab({
                         >
                           <div className="min-w-0 flex-1">
                             <div className="min-w-0 truncate text-sm font-medium text-rift-100">
-                              {card.cardData.name}
+                              {fullNameOf(card.cardData)}
                             </div>
                             <div className="text-[10px] uppercase tracking-wider text-rift-400">
-                              ID {card.cardData.id}
+                              {card.cardData.code || `ID ${card.cardData.id}`}
                             </div>
                           </div>
                           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 text-right">
@@ -1098,10 +1100,10 @@ export default function ScanTab({
                         >
                           <div className="min-w-0 flex-1">
                             <div className="min-w-0 truncate text-sm font-medium text-rift-100">
-                              {card.cardData.name}
+                              {fullNameOf(card.cardData)}
                             </div>
                             <div className="text-[10px] uppercase tracking-wider text-rift-400">
-                              ID {card.cardData.id}
+                              {card.cardData.code || `ID ${card.cardData.id}`}
                             </div>
                           </div>
                           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 text-right">
