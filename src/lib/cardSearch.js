@@ -1,4 +1,5 @@
 import { filterCardsBySet } from './cardMatcher.js';
+import { compareByFullName } from './cardData.js';
 
 const searchFields = (card) => [card.fullName, card.name, card.id, card.code, card.set, card.setName, card.collectorNumber, String(card.number || '')];
 
@@ -11,7 +12,7 @@ export function searchCards(cards, rawQuery, setFilter = 'all') {
   return filterCardsBySet(cards, setFilter)
     .filter((card) => searchFields(card).some((field) => String(field || '').toLowerCase().includes(query)))
     .sort((left, right) => scoreMatch(right) - scoreMatch(left)
-      || (left.fullName || left.name).localeCompare(right.fullName || right.name, undefined, { sensitivity: 'base' })
+      || compareByFullName(left, right)
       || String(left.id).localeCompare(String(right.id), undefined, { numeric: true, sensitivity: 'base' }))
     .slice(0, 12);
 }

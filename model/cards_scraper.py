@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -86,7 +87,7 @@ def fetch_list_page(path: str) -> dict:
     return resp.json()
 
 
-def _gallery_blade(next_data: dict):
+def _gallery_blade(next_data: dict) -> dict | None:
     page = next_data.get("props", {}).get("pageProps", {}).get("page", {})
     blades = page.get("blades", []) if isinstance(page, dict) else []
     for blade in blades:
@@ -95,7 +96,7 @@ def _gallery_blade(next_data: dict):
     return None
 
 
-def _next_link(page: dict):
+def _next_link(page: dict) -> str | None:
     """The list API's next-page link, from a blade's `cards` or an API page."""
     for linkdata in (page.get("async", {}).get("linkdata"), page.get("linkdata")):
         if isinstance(linkdata, dict) and linkdata.get("next"):
@@ -103,7 +104,7 @@ def _next_link(page: dict):
     return None
 
 
-def _follow_pages(cards: dict, fetch_page) -> list[dict]:
+def _follow_pages(cards: dict, fetch_page: Callable[[str], dict]) -> list[dict]:
     """
     Collects the first page's items and, unless the page says everything was
     prefetched, every further page of the list API. The card count is never
@@ -129,7 +130,7 @@ def _follow_pages(cards: dict, fetch_page) -> list[dict]:
     return unique
 
 
-def extract_cards(next_data: dict, fetch_page=fetch_list_page) -> list[dict]:
+def extract_cards(next_data: dict, fetch_page: Callable[[str], dict] = fetch_list_page) -> list[dict]:
     """
     Extracts the list of cards from the Next.js JSON data.
 

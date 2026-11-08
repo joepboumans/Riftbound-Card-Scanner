@@ -414,9 +414,14 @@ fn new_gallery_ids(raw_cards: &[Value], local: &HashSet<String>) -> Vec<String> 
   let mut seen = HashSet::new();
   raw_cards
     .iter()
-    .map(|raw| value_to_string(raw.get("id")).trim().to_string())
+    .map(card_id)
     .filter(|id| !id.is_empty() && !local.contains(id) && seen.insert(id.clone()))
     .collect()
+}
+
+/// A gallery card's id, trimmed. Empty when missing.
+fn card_id(raw: &Value) -> String {
+  value_to_string(raw.get("id")).trim().to_string()
 }
 
 fn extract_next_data(html: &str) -> Result<Value, String> {
@@ -447,8 +452,10 @@ fn gallery_image_url(raw: &Value) -> String {
 
 /// Records for every gallery card. A known card whose image is unchanged (or whose source
 /// image is unknown) gets a metadata-only record; a new card or a changed image is
-/// downloaded and re-hashed through `hash_image`. A failed download yields no record, so the
-/// local card database keeps the old one. Cards missing from the gallery are not touched.
+/// downloaded and re-hashed through `hash_image`. When a known card's re-download fails it
+/// still gets a metadata-only record that keeps its old source image, so its features and
+/// image path stay and the next update retries the download; a new card whose download
+/// fails gets no record. Cards missing from the gallery are not touched.
 fn gallery_update(
   raw_cards: Vec<Value>,
   known: &HashMap<String, String>,
@@ -457,7 +464,7 @@ fn gallery_update(
 ) -> GalleryUpdate {
   let mut seen_ids = HashSet::new();
   let raw_cards = raw_cards.into_iter().filter(|raw| {
-    let id = value_to_string(raw.get("id")).trim().to_string();
+    let id = card_id(raw);
     !id.is_empty() && seen_ids.insert(id)
   }).collect::<Vec<_>>();
   let total = raw_cards.len();
@@ -465,13 +472,19 @@ fn gallery_update(
   let mut skipped = 0usize;
 
   for (index, raw) in raw_cards.iter().enumerate() {
-    let id = value_to_string(raw.get("id")).trim().to_string();
+    let id = card_id(raw);
     let url = gallery_image_url(raw);
-    let needs_hash = !url.is_empty() && known.get(&id).map_or(true, |source| !source.is_empty() && *source != url);
+    let known_source = known.get(&id);
+    let needs_hash = !url.is_empty() && known_source.map_or(true, |source| !source.is_empty() && *source != url);
     if needs_hash {
       match hash_image(raw, &url) {
         Some((image_path, features)) => cards.push(card_record(raw, image_path, features)),
-        None => skipped += 1,
+        None => {
+          skipped += 1;
+          if let Some(source) = known_source {
+            cards.push(CardHashRecord { source_image_url: source.clone(), ..metadata_record(raw) });
+          }
+        }
       }
     } else if known.contains_key(&id) {
       cards.push(metadata_record(raw));
@@ -537,7 +550,7 @@ fn follow_pages(
     link = next_link(&page);
   }
   let mut seen_ids = HashSet::new();
-  Ok(all.into_iter().filter(|item| seen_ids.insert(value_to_string(item.get("id")))).collect())
+  Ok(all.into_iter().filter(|item| seen_ids.insert(card_id(item))).collect())
 }
 
 fn extract_cards(
@@ -684,7 +697,7 @@ fn hash_gallery_image(
     image = DynamicImage::ImageRgba8(rotated);
   }
 
-  let image_path = cards_cache_dir.join(format!("{}.webp", raw.get("id").map(|value| value_to_string(Some(value))).unwrap_or_default()));
+  let image_path = cards_cache_dir.join(format!("{}.webp", card_id(raw)));
   image
     .save_with_format(&image_path, image::ImageFormat::WebP)
     .map_err(|error| format!("Failed to save cached card image {}: {}", image_path.display(), error))?;
@@ -804,7 +817,7 @@ fn metadata_record(raw: &Value) -> CardHashRecord {
     .to_string();
 
   CardHashRecord {
-    id: raw.get("id").map(|value| value_to_string(Some(value))).unwrap_or_default(),
+    id: card_id(raw),
     name: raw.get("name").map(|value| value_to_string(Some(value))).unwrap_or_default(),
     subtitle: raw.get("subtitle").and_then(Value::as_str).unwrap_or("").to_string(),
     number: raw
@@ -912,7 +925,7 @@ mod tests {
       if failing_urls.contains(&url) {
         return None;
       }
-      Some((format!("C:/cards/{}.webp", value_to_string(raw.get("id"))), vec![0.5]))
+      Some((format!("C:/cards/{}.webp", card_id(raw)), vec![0.5]))
     }, &mut |_, _, _| {});
     let cards = update.cards.into_iter().map(|card| serde_json::to_value(card).unwrap()).collect();
     (cards, update.skipped, downloaded)
@@ -961,14 +974,21 @@ mod tests {
   }
 
   #[test]
-  fn failed_redownload_keeps_the_old_record() {
+  fn failed_redownload_still_refreshes_metadata_and_keeps_the_old_image() {
     let (cards, skipped, _) = run_update(
       vec![gallery_card_with("rad-001", "https://cdn.example/rad-001-v2.png", "New text")],
       &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
       &["https://cdn.example/rad-001-v2.png"],
     );
-    assert!(cards.is_empty(), "no record means the local one is kept unchanged");
     assert_eq!(skipped, 1);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0]["text"], "New text");
+    assert!(cards[0].get("f").is_none(), "features must stay the local ones");
+    assert!(cards[0].get("imageUrl").is_none(), "image path must stay the local one");
+    assert_eq!(
+      cards[0]["sourceImageUrl"], "https://cdn.example/rad-001.png",
+      "the old source image stays so the next update retries the download"
+    );
   }
 
   #[test]

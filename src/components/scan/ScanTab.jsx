@@ -10,10 +10,10 @@ import { CardTextIndex } from '../../lib/cardTextIdentity.js';
 import { recognizeCard, buildRecognitionResult, applyTextVerification, matchFromRanking } from '../../lib/cardRecognition.js';
 import { getDetector } from '../../lib/yoloDetector.js';
 import { getMatcher } from '../../lib/cardMatcher.js';
-import { downloadCSV, copyDeckList, validateForExport, EXPORT_FORMATS } from '../../lib/csvExporter.js';
+import { downloadCSV, copyDeckList, exportFileType, validateForExport, EXPORT_FORMATS } from '../../lib/csvExporter.js';
 import { formatPrice, getPriceValue as getRecordPriceValue } from '../../lib/priceFormat.js';
 import { isFoilOnly } from '../../data/sampleCards.js';
-import { fullNameOf, resolveCardData } from '../../lib/cardData.js';
+import { compareByFullName, fullNameOf, resolveCardData } from '../../lib/cardData.js';
 import { createCardEntry, matchesPendingScan } from '../../lib/collection.js';
 import { getSelectedDetectionEntries } from '../../lib/scanEntries.js';
 import { searchCards } from '../../lib/cardSearch.js';
@@ -407,7 +407,7 @@ export default function ScanTab({
       }
 
       if (pendingSort === 'name') {
-        const nameDelta = fullNameOf(left.cardData).localeCompare(fullNameOf(right.cardData), undefined, { sensitivity: 'base' });
+        const nameDelta = compareByFullName(left.cardData, right.cardData);
         if (nameDelta !== 0) return nameDelta;
       }
 
@@ -426,7 +426,7 @@ export default function ScanTab({
         if (amountDelta !== 0) return amountDelta;
       }
 
-      return fullNameOf(left.cardData).localeCompare(fullNameOf(right.cardData), undefined, { sensitivity: 'base' });
+      return compareByFullName(left.cardData, right.cardData);
     });
   }, [pendingCards, pendingSort, priceByCardId]);
 
@@ -653,12 +653,8 @@ export default function ScanTab({
   const copyCheckedDeckList = useCallback(async () => {
     const exportCards = getSelectedDetectionEntries(detections, checkedIndices);
     if (exportCards.length === 0) { showNotification('Select at least one card', 'error'); return; }
-    try {
-      await copyDeckList(exportCards);
-      showNotification('Deck list copied — ' + exportCards.length + ' card rows', 'success');
-    } catch {
-      showNotification('Could not copy the deck list', 'error');
-    }
+    const result = await copyDeckList(exportCards);
+    showNotification(result.message, result.success ? 'success' : 'error');
   }, [checkedIndices, detections, showNotification]);
 
   const handleDetectionEntryChange = useCallback((index, patch) => {
@@ -687,7 +683,7 @@ export default function ScanTab({
           </button>
           <button onClick={exportCheckedCSV} className="btn-secondary text-xs py-1.5 px-3 rounded-xl">
             <Download className="w-3.5 h-3.5" />
-            {exportFormat === EXPORT_FORMATS.DECK_LIST ? 'TXT' : 'CSV'}
+            {exportFileType(exportFormat)}
           </button>
           {exportFormat === EXPORT_FORMATS.DECK_LIST && (
             <button onClick={copyCheckedDeckList} className="btn-secondary text-xs py-1.5 px-3 rounded-xl">

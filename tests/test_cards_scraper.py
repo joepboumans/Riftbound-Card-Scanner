@@ -4,6 +4,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from unittest.mock import patch
 from io import BytesIO
 
@@ -16,15 +17,15 @@ GALLERY_SAMPLE = json.loads((FIXTURES / 'card-gallery-next-data.json').read_text
 GALLERY_EXPECTED = json.loads((FIXTURES / 'card-gallery-expected.json').read_text(encoding='utf-8'))
 
 
-def gallery_sample():
+def gallery_sample() -> dict:
     return copy.deepcopy(GALLERY_SAMPLE)
 
 
-def no_fetch(url):
+def no_fetch(url: str) -> dict:
     raise AssertionError(f'unexpected list API request: {url}')
 
 
-def parsed_summary(next_data, fetch_page=no_fetch):
+def parsed_summary(next_data: dict, fetch_page: Callable[[str], dict] = no_fetch) -> list[dict]:
     cards = [scraper.normalize_card(raw) for raw in scraper.extract_cards(next_data, fetch_page)]
     return [{'id': c['id'], 'code': c['public_code'], 'subtitle': c['subtitle']} for c in cards]
 
@@ -73,7 +74,7 @@ class GalleryParserTests(unittest.TestCase):
 
 
 class CardRecordSubtitleTests(unittest.TestCase):
-    def build_hashes(self, directory, prepare_db=None):
+    def build_hashes(self, directory: str, prepare_db: Callable[[str], None] | None = None) -> dict[str, dict]:
         root = pathlib.Path(directory)
         db_path = str(root / 'riftbound.db')
         hashes_path = root / 'card-hashes.json'

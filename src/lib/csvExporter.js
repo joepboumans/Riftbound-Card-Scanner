@@ -8,7 +8,7 @@
  *   - Deck list (plain text)
  */
 
-import { fullNameOf } from './cardData.js';
+import { codeWithoutTotal, fullNameOf } from './cardData.js';
 
 export const EXPORT_FORMATS = {
   CARDNEXUS: 'cardnexus',
@@ -91,7 +91,7 @@ function getCardPrefix(cardData) {
 }
 
 function getCardVariantNumber(cardData) {
-  const codePart = (cardData?.code || '').split('/')[0].trim();
+  const codePart = codeWithoutTotal(cardData?.code);
   if (codePart) return codePart;
 
   const prefix = getCardPrefix(cardData);
@@ -110,8 +110,7 @@ function isOvernumbered(cardData) {
 }
 
 function isRuneVariant(cardData) {
-  const codePart = String(cardData?.code || '').split('/')[0];
-  return /-R\d+[a-z]?$/i.test(codePart);
+  return /-R\d+[a-z]?$/i.test(codeWithoutTotal(cardData?.code));
 }
 
 function getVariantType(card) {
@@ -139,7 +138,7 @@ function getVariantLabel(card) {
   }
 
   const code = String(cardData.code || '');
-  const isAltArt = code.includes('*') || /[a-z]$/i.test(code.split('/')[0]) || rarity === 'showcase';
+  const isAltArt = code.includes('*') || /[a-z]$/i.test(codeWithoutTotal(code)) || rarity === 'showcase';
 
   if (isAltArt) {
     return 'Alt Art';
@@ -200,10 +199,10 @@ function buildPiltoverRow(card) {
 
 // riftbound.gg's CardId is the code without its set total; a signed `*` is spelled `-STAR`.
 function riftboundGgCardId(cardData) {
-  return String(cardData?.code || '').split('/')[0].trim().replace(/\*/g, '-STAR');
+  return codeWithoutTotal(cardData?.code).replace(/\*/g, '-STAR');
 }
 
-// riftbound.gg's name fallback matches its own catalog exactly, which joins name and title with ` - `.
+// riftbound.gg's name fallback matches its own card names exactly, which join name and title with ` - `.
 function riftboundGgName(cardData) {
   const fullName = fullNameOf(cardData);
   return fullName === cardData?.name ? fullName : fullName.replace(', ', ' - ');
@@ -259,7 +258,7 @@ const DECK_SECTIONS = [
 
 // The card database keeps no supertype, but every token's code numbers it `T<n>` (`UNL-T04`).
 function isToken(cardData) {
-  return /-T\d+[a-z]?$/i.test(String(cardData?.code || '').split('/')[0].trim());
+  return /-T\d+[a-z]?$/i.test(codeWithoutTotal(cardData?.code));
 }
 
 function deckSectionOf(cardData) {
@@ -342,14 +341,21 @@ export function generateCSV(cards, format = EXPORT_FORMATS.CARDNEXUS) {
   return buildRows(cards, format);
 }
 
-const CSV_FILE = { extension: 'csv', mimeType: 'text/csv;charset=utf-8;', bom: '\uFEFF' };
+const CSV_FILE = { extension: 'csv', mimeType: 'text/csv;charset=utf-8;', bom: '', trailer: '' };
 
 const EXPORT_FILES = {
-  [EXPORT_FORMATS.CARDNEXUS]: { ...CSV_FILE, prefix: 'riftbound-scan', label: 'CardNexus/PowerTools' },
-  [EXPORT_FORMATS.PILTOVER]: { ...CSV_FILE, prefix: 'riftbound-piltover', label: 'Piltover Archive' },
+  [EXPORT_FORMATS.CARDNEXUS]: { ...CSV_FILE, bom: '\uFEFF', prefix: 'riftbound-scan', label: 'CardNexus/PowerTools' },
+  [EXPORT_FORMATS.PILTOVER]: { ...CSV_FILE, bom: '\uFEFF', prefix: 'riftbound-piltover', label: 'Piltover Archive' },
   [EXPORT_FORMATS.RIFTBOUND_GG]: { ...CSV_FILE, prefix: 'riftbound-gg', label: 'riftbound.gg' },
-  [EXPORT_FORMATS.DECK_LIST]: { extension: 'txt', mimeType: 'text/plain;charset=utf-8;', bom: '', prefix: 'riftbound-deck', label: 'Deck list' },
+  [EXPORT_FORMATS.DECK_LIST]: { extension: 'txt', mimeType: 'text/plain;charset=utf-8;', bom: '', trailer: '\n', prefix: 'riftbound-deck', label: 'Deck list' },
 };
+
+/**
+ * The file type an export downloads as, for buttons: `CSV` or `TXT`.
+ */
+export function exportFileType(format) {
+  return EXPORT_FILES[normalizeExportFormat(format)].extension.toUpperCase();
+}
 
 /**
  * The file an export downloads as: name, content and media type.
@@ -360,7 +366,7 @@ export function exportFile(cards, format = EXPORT_FORMATS.CARDNEXUS, date = new 
   const body = generateCSV(cards, normalizedFormat);
   return {
     filename: `${file.prefix}-${date.toISOString().slice(0, 10)}.${file.extension}`,
-    content: file.bom + body + (normalizedFormat === EXPORT_FORMATS.DECK_LIST ? '\n' : ''),
+    content: file.bom + body + file.trailer,
     mimeType: file.mimeType,
     label: file.label,
   };
@@ -401,9 +407,15 @@ export function downloadCSV(cards, filename = null, format = EXPORT_FORMATS.CARD
 
 /**
  * Copy the deck list to the clipboard, for pasting straight into a deck builder.
+ * Resolves to whether it worked and the message to show.
  */
 export async function copyDeckList(cards) {
-  await navigator.clipboard.writeText(generateDeckList(cards));
+  try {
+    await navigator.clipboard.writeText(generateDeckList(cards));
+    return { success: true, message: 'Deck list copied' };
+  } catch {
+    return { success: false, message: 'Could not copy the deck list' };
+  }
 }
 
 /**

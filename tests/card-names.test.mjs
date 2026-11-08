@@ -10,8 +10,8 @@ const kaisaLegend = { id: 'ogn-247-298', name: 'Daughter of the Void', code: 'OG
 const ziggsLegend = { id: 'ogn-ziggs-legend', name: 'Hexplosives Expert', code: 'OGN-260/298', type: 'legend', tags: ['Yordle', 'Ziggs'] };
 const starterLegend = { id: 'ogs-starter', name: 'Daughter of the Void', subtitle: 'Starter', code: 'OGS-017/024', type: 'legend', tags: ["Kai'Sa"] };
 const plainSpell = { id: 'ogn-spell', name: 'Falling Star', code: 'OGN-030/298', type: 'spell', tags: [] };
-const catalog = [kaisaUnit, ziggsUnit, kaisaLegend, ziggsLegend, starterLegend, plainSpell];
-const fullNameOf = (id) => withFullNames(catalog).find((card) => card.id === id).fullName;
+const cardDatabase = [kaisaUnit, ziggsUnit, kaisaLegend, ziggsLegend, starterLegend, plainSpell];
+const fullNameOf = (id) => withFullNames(cardDatabase).find((card) => card.id === id).fullName;
 
 test('a legend full name is its champion plus its title', () => {
   assert.equal(fullNameOf('ogn-247-298'), "Kai'Sa, Daughter of the Void");
@@ -36,7 +36,7 @@ test('a card without a subtitle keeps its printed name', () => {
 
 test('an old saved entry with only a name comes back with its full name from the card database', () => {
   const saved = [{ cardData: { id: 'rad-sp4-005', name: "Kai'Sa" }, quantity: 2, foil: true }];
-  const [restored] = restoreCardEntries(saved, withFullNames(catalog));
+  const [restored] = restoreCardEntries(saved, withFullNames(cardDatabase));
   assert.equal(restored.cardData.fullName, "Kai'Sa, Rebel");
   assert.equal(restored.cardData.subtitle, 'Rebel');
   assert.equal(restored.cardData.code, 'RAD-SP4/005');
@@ -46,14 +46,14 @@ test('an old saved entry with only a name comes back with its full name from the
 
 test('a saved entry whose id is not in the card database keeps its stored copy', () => {
   const stored = { id: 'custom-promo', name: 'My Promo', code: 'PROMO-1' };
-  const [restored] = restoreCardEntries([{ cardData: stored }], withFullNames(catalog));
+  const [restored] = restoreCardEntries([{ cardData: stored }], withFullNames(cardDatabase));
   assert.deepEqual(restored.cardData, stored);
 });
 
 test('search over the loaded card database finds a card by full name, printed name and code', () => {
   const runtime = createRuntime();
   const matcher = runtime.load('src/lib/cardMatcher.js').getMatcher();
-  matcher._applyDatabase({ gridSize: 2, cards: catalog.map((card) => ({ ...card, f: [0, 0, 0] })) });
+  matcher._applyDatabase({ gridSize: 2, cards: cardDatabase.map((card) => ({ ...card, f: [0, 0, 0] })) });
   const { searchCards } = runtime.load('src/lib/cardSearch.js');
   const ids = (query) => searchCards(matcher.cards, query).map((card) => card.id);
   assert.ok(ids("Kai'Sa, Daughter").includes('ogn-247-298'));
