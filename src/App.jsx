@@ -17,7 +17,7 @@ import { useCardDetection } from './hooks/useCardDetection.js';
 import { useAutoScan } from './hooks/useAutoScan.js';
 import { useScanSound } from './hooks/useScanSound.js';
 import { useNewPrintCheck } from './hooks/useNewPrintCheck.js';
-import { downloadCSV, validateForExport, EXPORT_FORMATS } from './lib/csvExporter.js';
+import { downloadCSV, copyDeckList, validateForExport, EXPORT_FORMATS } from './lib/csvExporter.js';
 import { getMatcher, mergeCardDatabaseUpdate, sourceImageUrlOf } from './lib/cardMatcher.js';
 import { buildScanSetOptions, summarizeScanSetCoverage } from './lib/scanSets.js';
 import { isDesktopRuntime } from './lib/runtime.js';
@@ -1106,11 +1106,20 @@ export default function App() {
     const result = downloadCSV(scannedCards, null, exportFormat);
     if (result.success) {
       showNotification(
-        `CSV downloaded: ${result.filename} (${result.format}, ${scannedCards.length} cards)`,
+        `Downloaded: ${result.filename} (${result.format}, ${scannedCards.length} cards)${result.notice ? ` · ${result.notice}` : ''}`,
         'success'
       );
     }
   }, [scannedCards, showNotification, exportFormat]);
+
+  const handleCopyDeckList = useCallback(async () => {
+    try {
+      await copyDeckList(scannedCards);
+      showNotification('Deck list copied', 'success');
+    } catch {
+      showNotification('Could not copy the deck list', 'error');
+    }
+  }, [scannedCards, showNotification]);
 
   // ─── Render ────────────────────────────────────────────────
   const cardDatabaseInput = (
@@ -1219,6 +1228,8 @@ export default function App() {
             onSplitCard={handleSplitCardVariant}
             onClearAll={handleClearAll}
             onExport={handleExport}
+            exportFormat={exportFormat}
+            onCopyDeckList={handleCopyDeckList}
             priceByCardId={priceByCardId}
             priceCurrency={priceCurrency}
             priceExchangeRates={priceExchangeRates}
