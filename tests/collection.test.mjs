@@ -83,5 +83,5 @@ test('bulk CSV uses the reviewed quantity, finish, promo and other row metadata'
 test('foil-only normalization is identical for direct and bulk CSV paths', () => {
   const rare = entry({ cardData: resolveCardData({ ...card, rarity: 'rare' }), foil: false });
   assert.equal(rare.foil, true);
-  assert.match(generateCSV(getSelectedDetectionEntries([{ entry: rare }], new Set([0]))), /Foil$/);
+  assert.match(generateCSV(getSelectedDetectionEntries([{ entry: rare }], new Set([0]))), /,Foil,[^,]*$/);
 });

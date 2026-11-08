@@ -6,6 +6,8 @@
  *   - Piltover Archive
  */
 
+import { fullNameOf } from './cardData.js';
+
 export const EXPORT_FORMATS = {
   CARDNEXUS: 'cardnexus',
   PILTOVER: 'piltover',
@@ -24,6 +26,7 @@ const CARDNEXUS_HEADERS = [
   'Condition',
   'Language',
   'Finish',
+  'Code',
 ];
 
 const PILTOVER_HEADERS = [
@@ -42,6 +45,7 @@ const PILTOVER_HEADERS = [
   'Grading Value',
   'Grading Label',
   'Notes',
+  'Code',
 ];
 
 const FOIL_ONLY_RARITIES = new Set(['rare', 'epic', 'legendary', 'showcase', 'legend']);
@@ -141,7 +145,7 @@ function getVariantLabel(card) {
 }
 
 function buildCardNexusRow(card) {
-  const exportName = card.cardData.name;
+  const exportName = fullNameOf(card.cardData);
   const exportCollector = (card.cardData.collectorNumber || '').replace(/\*/g, '');
   const exportSet = card.promo ? 'OGNX' : (card.cardData.set || 'OGN');
 
@@ -153,6 +157,7 @@ function buildCardNexusRow(card) {
     escapeCSV(card.condition || 'Near Mint'),
     escapeCSV(card.language || 'English'),
     card.foil ? 'Foil' : 'Standard',
+    escapeCSV(card.cardData.code || ''),
   ];
 }
 
@@ -167,7 +172,7 @@ function buildPiltoverRow(card) {
 
   return [
     escapeCSV(variantNumber),
-    escapeCSV(cardData.name || ''),
+    escapeCSV(fullNameOf(cardData)),
     escapeCSV(displaySet),
     escapeCSV(setPrefix),
     escapeCSV(cardData.rarity ? String(cardData.rarity).replace(/\b\w/g, (m) => m.toUpperCase()) : ''),
@@ -181,6 +186,7 @@ function buildPiltoverRow(card) {
     '',
     '',
     '',
+    escapeCSV(cardData.code || ''),
   ];
 }
 
