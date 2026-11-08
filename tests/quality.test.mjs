@@ -265,7 +265,7 @@ async function detectionFixture(sample = textured()) {
   detection = hook.render({ minSimilarity: 0.9 });
   const frame = { width: 800, height: 900, frameId: 1, capturedAt: Date.now(),
     scanRegion: { x: 400, y: 100, guide: { x: 100, y: 100, width: 300, height: 500 } } };
-  return { hook, detection, frame, matcher, detector, get matcherCalls() { return matcherCalls; }, get detectionCalls() { return detectionCalls; } };
+  return { runtime, hook, detection, frame, matcher, detector, get matcherCalls() { return matcherCalls; }, get detectionCalls() { return detectionCalls; } };
 }
 
 test('the camera detection path chooses the guide card and maps its overlay back to the full video', async () => {
@@ -336,4 +336,41 @@ test('capture profiles are kept separately for each selected camera', () => {
   assert.equal(settings.cameraProfile, 'low-light');
   settings.onUpdateCameraDeviceId('cameraA');
   assert.equal(componentProps(app.render(), 'SettingsTab').cameraProfile, 'balanced');
+});
+
+test('Snap ranks a failed-quality card for review only, never for acceptance', async () => {
+  const fixture = await detectionFixture(pixels(() => 0));
+  const ranked = ['first', 'second', 'third', 'fourth'].map((id, index) => ({ card: { id, name: id, code: `FIX-00${index}/100` }, similarity: .8 - index / 20 }));
+  let rankCalls = 0;
+  fixture.matcher.rank = () => { rankCalls++; return ranked; };
+  assert.equal(await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true }), null,
+    'auto scan still skips matching on a failed-quality frame');
+  assert.equal(rankCalls, 0);
+  const result = await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true, includeReview: true });
+  assert.equal(result.matched, false);
+  assert.equal(result.quality.acceptable, false);
+  assert.equal(isReliableScanResult(result), false);
+  assert.ok(result.box, 'the outline is kept');
+  assert.deepEqual(Array.from(result.reviewCandidates, (card) => card.id), ['first', 'second', 'third']);
+  assert.equal(fixture.matcherCalls, 0, 'nothing went through the acceptance match');
+});
+
+test('Snap returns an outlined card with no ranked candidates for review', async () => {
+  const fixture = await detectionFixture();
+  fixture.matcher.identify = () => null;
+  assert.equal(await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true }), null);
+  const result = await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true, includeReview: true });
+  assert.equal(result.matched, false);
+  assert.ok(result.box);
+  assert.deepEqual(Array.from(result.reviewCandidates), []);
+});
+
+test('every ranked detection carries its top candidates and artwork crop for the Choice strip', async () => {
+  const fixture = await detectionFixture();
+  fixture.matcher.identify = () => ({ card: { id: 'unclear', name: 'Unclear' }, similarity: 0.8, secondBestSim: 0.79 });
+  const result = await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true });
+  assert.equal(fixture.hook.render().lastDetection.reviewCandidates[0].id, 'unclear');
+  const { getScanArtwork } = fixture.runtime.load('src/lib/scanEvidence.js');
+  assert.ok(getScanArtwork(result).crop);
+  assert.equal(getScanArtwork(result).quality, result.quality);
 });

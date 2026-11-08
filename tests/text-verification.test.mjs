@@ -709,9 +709,9 @@ test('an uncertain manual scan requires an explicit candidate choice and cancell
   assert.equal(f.scan().pendingCards.length,0);
   componentProps(f.app.render(),'ManualScanReview').onClose();assert.equal(f.scan().pendingCards.length,0);
   job=f.scan().onSnapScan();f.complete(weak);await job;
-  componentProps(f.app.render(),'ManualScanReview').onSelect(candidate);
+  componentProps(f.app.render(),'ManualScanReview').onSelect(candidate,1);
   assert.equal(f.scan().pendingCards.length,1);assert.equal(f.scan().pendingCards[0].similarity,.71);
-  assert.equal(f.scan().pendingCards[0].manualAdded,true);
+  assert.equal(f.scan().pendingCards[0].userConfirmed,true);assert.equal(f.scan().pendingCards[0].manualAdded,undefined);
 });
 
 test('repeated manual taps cannot start overlapping recognition or add duplicate copies', async () => {
