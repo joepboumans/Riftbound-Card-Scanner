@@ -42,6 +42,13 @@ export function getCardVariantKey(entry) {
   ]);
 }
 
+// A pending row keeps the learned references of every user-confirmed scan
+// merged into it, oldest first, so removing the row can undo them all.
+function mergedLearnedReferenceIds(row, entry) {
+  const ids = [...(row.learnedReferenceIds || []), ...(entry.learnedReferenceIds || [])];
+  return ids.length ? { learnedReferenceIds: ids } : {};
+}
+
 export function mergeCardEntries(existing, incoming) {
   const updated = [...existing];
   for (const payload of incoming) {
@@ -55,7 +62,8 @@ export function mergeCardEntries(existing, incoming) {
       }
       updated.push(entry);
     } else {
-      updated[index] = { ...updated[index], quantity: updated[index].quantity + entry.quantity };
+      updated[index] = { ...updated[index], quantity: updated[index].quantity + entry.quantity,
+        ...mergedLearnedReferenceIds(updated[index], entry) };
     }
   }
   return updated;

@@ -226,6 +226,11 @@ class CardMatcher {
     return this._computeColorGrid(this._cropArtwork(cropCanvas), { areaSampling });
   }
 
+  // A card's official reference features, or null when it is not in the card database.
+  officialFeatures(cardId) {
+    return this.cards.find((card) => card.id === cardId)?.f || null;
+  }
+
   rankFeatures(features, { setFilter, limit = 3, localStructure = false, alignLocal = true, requiredIds = null } = {}) {
     if (!this.ready) return [];
     const featureStats = describeFeatures(features);

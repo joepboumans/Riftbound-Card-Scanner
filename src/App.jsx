@@ -101,6 +101,11 @@ function mergeCardDatabases(existingDatabase, updateDatabase) {
   };
 }
 
+// Undoing a wrong pick: its user-confirmed scans must not teach the matcher.
+function forgetLearnedReferences(ids = []) {
+  for (const id of ids) getLearnedReferences().remove(id);
+}
+
 export default function App() {
   // ─── App State ─────────────────────────────────────────────
   const [isLoading, setIsLoading] = useState(true);
@@ -1001,7 +1006,8 @@ export default function App() {
     }
     lastAddRef.current = { cardId: card.id, at: Date.now() };
     const entry = createUserConfirmedEntry(scan, card, { from, rank }, batchDefaultsRef.current);
-    entry.learnedReferenceId = onUserConfirmed({ entry, card: entry.cardData, from, rank, artwork: getScanArtwork(scan) || null });
+    const learnedReferenceId = onUserConfirmed({ entry, card: entry.cardData, from, rank, artwork: getScanArtwork(scan) || null });
+    entry.learnedReferenceIds = learnedReferenceId ? [learnedReferenceId] : [];
     queuePendingEntry(entry);
     scanSound.playScanAccepted();
     autoScan.setLastCardId(card.id);
@@ -1035,8 +1041,7 @@ export default function App() {
     const card = pendingCards.find((entry) => entry.entryId === entryId);
     setPendingCards((prev) => prev.filter((entry) => entry.entryId !== entryId));
     if (card) setRecentPendingScanEvents((prev) => prev.filter((event) => !matchesPendingScan(event, card)));
-    // Undoing a wrong pick: its scan must not teach the matcher.
-    if (card?.learnedReferenceId) getLearnedReferences().remove(card.learnedReferenceId);
+    forgetLearnedReferences(card?.learnedReferenceIds);
   }, [pendingCards]);
 
   const handleAdjustPendingQuantity = useCallback((entryId, delta) => {
@@ -1046,17 +1051,21 @@ export default function App() {
       handleRemovePending(entryId);
       return;
     }
+    // Lowering the quantity undoes the most recent user-confirmed scans first.
+    const ids = card.learnedReferenceIds || [];
+    const kept = delta < 0 ? ids.slice(0, Math.max(0, ids.length + delta)) : ids;
+    forgetLearnedReferences(ids.slice(kept.length));
     setPendingCards((prev) => prev.map((entry) => entry.entryId === entryId
-      ? { ...entry, quantity: Math.max(1, entry.quantity + delta) }
+      ? { ...entry, quantity: Math.max(1, entry.quantity + delta), ...(kept !== ids ? { learnedReferenceIds: kept } : {}) }
       : entry));
     if (delta > 0) recordRecentPendingScan(card, Date.now());
   }, [handleRemovePending, pendingCards, recordRecentPendingScan]);
 
+  // Clearing is not undoing: learned references saved by these rows stay.
   const handleClearPending = useCallback(() => {
-    for (const entry of pendingCards) if (entry.learnedReferenceId) getLearnedReferences().remove(entry.learnedReferenceId);
     setPendingCards([]);
     setRecentPendingScanEvents([]);
-  }, [pendingCards]);
+  }, []);
 
   const handleUpdateCard = useCallback((index, updatedCard) => {
     setScannedCards((prev) => prev.map((entry, i) => i === index

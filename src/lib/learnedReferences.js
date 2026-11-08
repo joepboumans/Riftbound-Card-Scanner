@@ -24,10 +24,24 @@ export function describeScanArtwork({ crop, quality, outlined, areaSampling = fa
   let features;
   return { crop, quality, outlined: Boolean(outlined),
     features: () => (features ||= matcher.artworkFeatures(crop, { areaSampling })),
-    officialFeatures: (cardId) => matcher.cards.find((card) => card.id === cardId)?.f || null };
+    officialFeatures: (cardId) => matcher.officialFeatures(cardId) };
 }
 
-// §2: the crop came from a detected card outline and passed the quality check
+// Feature vectors are RGB grids: three values per cell of a gridSize x gridSize grid.
+const featureLength = (gridSize) => gridSize * gridSize * 3;
+const gridSizeOf = (features) => Math.round(Math.sqrt(features.length / 3));
+
+/**
+ * Whether the matcher can use a learned reference: its card is in the card
+ * database (`cardIds`) and its feature vector has the card database's grid
+ * size. An unusable one is kept, unused, until its card returns.
+ */
+export function isUsableLearnedReference(reference, { cardIds, gridSize }) {
+  return cardIds.has(reference.cardId) && reference.gridSize === gridSize &&
+    reference.features?.length === featureLength(gridSize);
+}
+
+// See issue #6 (learned references): the crop came from a detected card outline and passed the quality check
 // without glare. A failed-quality Snap review crop never qualifies.
 const isClearCrop = (artwork) => Boolean(artwork?.outlined && artwork.quality?.acceptable === true &&
   artwork.quality.issue !== 'glare' && !artwork.quality.reflectionRisk);
@@ -43,14 +57,11 @@ function rankableFeatures(artwork) {
   }
 }
 
-/**
- * Settings counts. A reference whose card id is not in the current catalog, or
- * whose grid size is not the card database's, is kept but unused.
- */
+/** Settings counts, with `unused` by the same rule as the matcher's learned pass. */
 export function summarizeLearnedReferences(references, { cards = [], gridSize = null } = {}) {
-  const catalog = new Set(cards.map((card) => card.id));
+  const usable = { cardIds: new Set(cards.map((card) => card.id)), gridSize };
   return { references: references.length, cards: new Set(references.map((record) => record.cardId)).size,
-    unused: references.filter((record) => !catalog.has(record.cardId) || record.gridSize !== gridSize).length };
+    unused: references.filter((record) => !isUsableLearnedReference(record, usable)).length };
 }
 
 export const LEARNED_REFERENCES_BACKUP_FORMAT = 'riftbound-learned-references';
@@ -60,7 +71,7 @@ export const LEARNED_REFERENCES_BACKUP_VERSION = 1;
 function readBackupRecord(record) {
   const gridSize = Number(record?.gridSize);
   if (typeof record?.cardId !== 'string' || !record.cardId || !Array.isArray(record.features) ||
-    !Number.isInteger(gridSize) || gridSize < 1 || record.features.length !== gridSize * gridSize * 3 ||
+    !Number.isInteger(gridSize) || gridSize < 1 || record.features.length !== featureLength(gridSize) ||
     !record.features.every(Number.isFinite)) return null;
   return { id: typeof record.id === 'string' && record.id ? record.id : null, cardId: record.cardId,
     features: Float32Array.from(record.features), gridSize,
@@ -74,15 +85,19 @@ function readBackupRecord(record) {
  */
 export function createLearnedReferences({ store = indexedDBStore, now = Date.now, createId = createReferenceId } = {}) {
   let records = [];
+  const listeners = new Set();
+  const notify = () => { for (const listener of listeners) listener(); };
   // Every change runs after the initial load and after the previous change.
   let queue = Promise.resolve().then(() => store.load()).then((loaded) => { records = loaded || []; })
-    .catch((error) => console.warn('[LearnedReferences] Could not load learned references:', error));
+    .catch((error) => console.warn('[LearnedReferences] Could not load learned references:', error))
+    .then(notify);
   const enqueue = (change) => {
-    queue = queue.then(change).catch((error) => console.warn('[LearnedReferences] Could not store learned references:', error));
+    queue = queue.then(change).catch((error) => console.warn('[LearnedReferences] Could not store learned references:', error))
+      .then(notify);
     return queue;
   };
 
-  // Applies §3 limits for one card: a near-duplicate is replaced, otherwise
+  // Applies the per-card limits of issue #6: a near-duplicate is replaced, otherwise
   // the card keeps its newest references. Resolves to whether `record` was kept
   // (an imported one can be older than all of a full card's references).
   async function add(record) {
@@ -115,7 +130,7 @@ export function createLearnedReferences({ store = indexedDBStore, now = Date.now
     save({ cardId, artwork }) {
       const features = cardId && isClearCrop(artwork) ? rankableFeatures(artwork) : null;
       if (!features) return null;
-      const record = { id: createId(), cardId, features, gridSize: Math.round(Math.sqrt(features.length / 3)),
+      const record = { id: createId(), cardId, features, gridSize: gridSizeOf(features),
         savedAt: now(), officialSimilarity: officialSimilarity(features, artwork.officialFeatures?.(cardId)) };
       enqueue(() => add(record));
       return record.id;
@@ -142,17 +157,26 @@ export function createLearnedReferences({ store = indexedDBStore, now = Date.now
       if (backup?.format !== LEARNED_REFERENCES_BACKUP_FORMAT || backup.formatVersion !== LEARNED_REFERENCES_BACKUP_VERSION ||
         !Array.isArray(backup.records)) throw new Error('Not a learned references backup');
       const incoming = backup.records.map(readBackupRecord).filter(Boolean).sort((a, b) => a.savedAt - b.savedAt);
-      let merged = 0;
+      const merged = new Set();
       await enqueue(async () => {
         for (const record of incoming) {
           if (records.some((other) => other.id === record.id)) continue;
-          if (await add({ ...record, id: record.id ?? createId() })) merged += 1;
+          const id = record.id ?? createId();
+          if (await add({ ...record, id })) merged.add(id);
         }
       });
-      return merged;
+      // A record merged early can be evicted by a later one of the same card.
+      return records.filter((record) => merged.has(record.id)).length;
     },
     /** Every stored learned reference, for the matcher's learned pass. */
     references: () => records,
+    /** How many learned references a card has ("Forget my scans of this card"). */
+    countForCard: (cardId) => records.filter((record) => record.cardId === cardId).length,
+    /** Calls `listener` after loading and after every change; returns the unsubscribe function. */
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     /** Resolves once every change so far is stored. */
     settled: () => queue,
   };
