@@ -7,17 +7,15 @@
 import { resolveCardData } from './cardData.js';
 import { compareFeatures } from './cardSimilarity.js';
 import { filterCardsBySet } from './cardMatcher.js';
+import { isUsableLearnedReference } from './learnedReferences.js';
 
 export const SHOWN_CANDIDATES = 3;
 
-// Each card's best learned score for this scan's artwork. A reference whose
-// card is not in the card database, or whose grid size differs from the
-// matcher's, is kept but unused until its card returns.
-function rankLearnedReferences(features, references, cardsById, gridSize) {
+// Each card's best learned score for this scan's artwork, from usable references only.
+function rankLearnedReferences(features, references, cardsById) {
   const best = new Map();
   for (const reference of references) {
     const card = cardsById.get(reference.cardId);
-    if (!card || reference.gridSize !== gridSize || reference.features?.length !== features.length) continue;
     const { similarity } = compareFeatures(features, reference.features);
     if (!(best.get(card.id)?.similarity >= similarity)) best.set(card.id, { card, similarity });
   }
@@ -33,10 +31,14 @@ function rankLearnedReferences(features, references, cardsById, gridSize) {
  * @param {{ artwork: { features(): ArrayLike<number> }, references: object[],
  *   matcher: { cards: object[], gridSize: number }, setFilter?: string|string[] }} options
  */
-export function showLearnedCandidates(candidates = [], { artwork, references = [], matcher, setFilter } = {}) {
+export function mergeLearnedCandidates(candidates = [], { artwork, references = [], matcher, setFilter } = {}) {
   if (!references.length || !artwork || !matcher?.cards?.length) return candidates;
   const cardsById = new Map(filterCardsBySet(matcher.cards, setFilter).map((card) => [card.id, card]));
-  const learned = rankLearnedReferences(Float32Array.from(artwork.features() || []), references, cardsById, matcher.gridSize);
+  const usable = references.filter((reference) =>
+    isUsableLearnedReference(reference, { cardIds: cardsById, gridSize: matcher.gridSize }));
+  // The scan's artwork is read only when a learned reference can use it.
+  if (!usable.length) return candidates;
+  const learned = rankLearnedReferences(Float32Array.from(artwork.features() || []), usable, cardsById);
   const lifted = [...learned.values()]
     .filter(({ card, similarity }) => !(candidates.find((candidate) => candidate.id === card.id)?.similarity >= similarity))
     .sort((a, b) => b.similarity - a.similarity);

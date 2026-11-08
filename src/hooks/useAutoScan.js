@@ -67,7 +67,9 @@ export function useAutoScan({ cameraIsActive, isProcessing, detectSingleFrame, c
       processing = true;
       const generation = generationRef.current;
       try {
-        const result = await latestRef.current.detectSingleFrame(latestRef.current.captureFrame, { includeCandidate: true, retainEvidence: debugEnabled });
+        const result = await latestRef.current.detectSingleFrame(latestRef.current.captureFrame, { includeCandidate: true, retainEvidence: debugEnabled,
+          // Only real auto scan shows the Choice strip.
+          offerCandidates: mode === 'auto' && !debugEnabled });
         if (cancelled || generation !== generationRef.current || modeRef.current !== mode || contextRef.current !== recognitionContext) return;
         if (result?.skipped) {
           emitScanDiagnostic('auto-decision',{reason:'no-fresh-source'});

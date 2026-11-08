@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRuntime } from './helpers/runtime.mjs';
+import { createRuntime, nodes } from './helpers/runtime.mjs';
 
 const runtime = createRuntime();
 const { createLearnedReferences, describeScanArtwork, MAX_LEARNED_REFERENCES_PER_CARD } = runtime.load('src/lib/learnedReferences.js');
@@ -20,7 +20,8 @@ function memoryStore(initial = []) {
 
 // The matcher reads a crop's artwork as its feature vector; a test crop carries it.
 const matcher = { revision: 7, cards: [{ id: 'ogn-001', f: grid(0) }], samplings: [],
-  artworkFeatures(crop, { areaSampling }) { this.samplings.push(areaSampling); return crop.features; } };
+  artworkFeatures(crop, { areaSampling }) { this.samplings.push(areaSampling); return crop.features; },
+  officialFeatures(cardId) { return this.cards.find((card) => card.id === cardId)?.f || null; } };
 const clearQuality = { acceptable: true, issue: null, score: .8, reflectionRisk: false };
 const clearArtwork = (features = grid(.2), patch = {}) =>
   describeScanArtwork({ crop: { features }, quality: clearQuality, outlined: true, matcher, ...patch });
@@ -52,7 +53,7 @@ test('an acceptable crop from a user-confirmed scan saves the vector the matcher
 
 test('a card with no official reference still saves, with no official similarity', async () => {
   const { learned } = fixture();
-  learned.save({ cardId: 'not-in-catalog', artwork: clearArtwork() });
+  learned.save({ cardId: 'not-in-card-database', artwork: clearArtwork() });
   await learned.settled();
   assert.equal(learned.references()[0].officialSimilarity, null);
 });
@@ -166,19 +167,62 @@ test('import merges with the five-per-card limit and the duplicate rule, skippin
     record('copy', 'ogn-002', nearCopy, 200),
     { id: 'broken', cardId: 'ogn-003', features: [1, 2], gridSize: 2, savedAt: 300 },
   ] };
-  assert.equal(await learned.importBackup(backup), 8);
+  assert.equal(await learned.importBackup(backup), 6, 'records evicted later in the same import are not counted');
   assert.deepEqual(ids(learned).sort(), ['a2', 'a3', 'a4', 'a5', 'a6', 'copy']);
   assert.deepEqual([...store.rows.keys()].sort(), ['a2', 'a3', 'a4', 'a5', 'a6', 'copy']);
   assert.equal(await learned.importBackup(backup), 0, 'records already stored are skipped');
   await assert.rejects(learned.importBackup({ records: [] }), /Not a learned references backup/);
 });
 
-test('the summary counts references, cards, and unused ones with an unknown card id or another grid size', () => {
+test('the summary counts references, cards, and unused ones with an unknown card id, another grid size or a mismatched feature vector', () => {
   const { summarizeLearnedReferences } = runtime.load('src/lib/learnedReferences.js');
-  const record = (cardId, gridSize = 2) => ({ cardId, gridSize });
-  const references = [record('ogn-001'), record('ogn-001'), record('ogn-001', 3), record('gone'), record('ogn-002')];
+  const record = (cardId, gridSize = 2, features = grid(1)) => ({ cardId, gridSize, features });
+  const references = [record('ogn-001'), record('ogn-001'), record('ogn-001', 3), record('gone'), record('ogn-002'),
+    record('ogn-002', 2, new Float32Array(27))];
   const cards = [{ id: 'ogn-001' }, { id: 'ogn-002' }, { id: 'ogn-003' }];
-  assert.deepEqual({ ...summarizeLearnedReferences(references, { cards, gridSize: 2 }) }, { references: 5, cards: 3, unused: 2 });
-  assert.deepEqual({ ...summarizeLearnedReferences(references, { cards: [], gridSize: 2 }) }, { references: 5, cards: 3, unused: 5 });
+  assert.deepEqual({ ...summarizeLearnedReferences(references, { cards, gridSize: 2 }) }, { references: 6, cards: 3, unused: 3 });
+  assert.deepEqual({ ...summarizeLearnedReferences(references, { cards: [], gridSize: 2 }) }, { references: 6, cards: 3, unused: 6 });
   assert.deepEqual({ ...summarizeLearnedReferences([], { cards, gridSize: 2 }) }, { references: 0, cards: 0, unused: 0 });
+});
+
+test('the per-card count follows saves and forgetting, and listeners hear about every change', async () => {
+  const stored = memoryStore([{ id: 'stored', cardId: 'ogn-001', features: grid(10), gridSize: 2, savedAt: 1, officialSimilarity: null }]);
+  const { learned } = fixture({ store: stored });
+  let changes = 0;
+  const unsubscribe = learned.subscribe(() => { changes += 1; });
+  assert.equal(learned.countForCard('ogn-001'), 0, 'nothing is counted before the stored references load');
+  await learned.settled();
+  assert.equal(changes, 1, 'loading is a change');
+  assert.equal(learned.countForCard('ogn-001'), 1);
+  learned.save({ cardId: 'ogn-001', artwork: clearArtwork(grid(1)) });
+  learned.save({ cardId: 'ogn-002', artwork: clearArtwork(grid(1)) });
+  await learned.settled();
+  assert.equal(learned.countForCard('ogn-001'), 2);
+  assert.equal(learned.countForCard('ogn-002'), 1);
+  learned.forgetCard('ogn-001');
+  await learned.settled();
+  assert.equal(learned.countForCard('ogn-001'), 0);
+  assert.equal(changes, 4);
+  unsubscribe();
+  learned.clear();
+  await learned.settled();
+  assert.equal(changes, 4, 'an unsubscribed listener hears nothing');
+});
+
+test('a card database update leaves the learned references store alone', async () => {
+  const writes = [];
+  const reference = { id: 'kept', cardId: 'ogn-001', features: grid(1), gridSize: 2, savedAt: 1, officialSimilarity: null };
+  const updateRuntime = createRuntime({ mocks: { 'src/lib/indexedDB.js': {
+    loadMatcherDatabase: async () => null, saveMatcherDatabase: async () => ({ updatedAt: 'new' }),
+    loadLearnedReferences: async () => [reference], writeLearnedReferences: async (change) => { writes.push(change); },
+  } } });
+  const learned = updateRuntime.load('src/lib/learnedReferences.js').getLearnedReferences();
+  const Matcher = updateRuntime.load('src/lib/cardMatcher.js').default;
+  const cardMatcher = new Matcher();
+  await learned.settled();
+  await cardMatcher.setDatabase({ gridSize: 2, cards: [{ id: 'ogn-002', set: 'OGN', f: [...grid(3)] }] });
+  await learned.settled();
+  assert.deepEqual(ids(learned), ['kept']);
+  assert.deepEqual(writes, []);
+  assert.equal(learned.references()[0], reference);
 });

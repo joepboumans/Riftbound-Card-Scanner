@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRuntime } from './helpers/runtime.mjs';
 
 const runtime = createRuntime();
-const { showLearnedCandidates } = runtime.load('src/lib/learnedCandidates.js');
+const { mergeLearnedCandidates } = runtime.load('src/lib/learnedCandidates.js');
 
 // A 2x2 RGB grid with structure. `seed` varies the pattern.
 const grid = (seed = 0) => Float32Array.from({ length: 12 }, (_, i) => .5 + .4 * Math.sin(i * 1.3 + seed));
@@ -17,7 +17,7 @@ const learned = (cardId, features = scanFeatures, patch = {}) =>
   ({ id: `learned-${cardId}`, cardId, features, gridSize: 2, savedAt: 1, officialSimilarity: null, ...patch });
 
 test('a learned match lifts a card into the shown top 3, marked as from your scans', () => {
-  const candidates = showLearnedCandidates(official, { artwork, references: [learned('mine')], matcher });
+  const candidates = mergeLearnedCandidates(official, { artwork, references: [learned('mine')], matcher });
   assert.deepEqual(candidates.map((candidate) => candidate.id), ['mine', 'first', 'second']);
   assert.equal(candidates[0].fromLearnedReference, true);
   assert.ok(Math.abs(candidates[0].similarity - 1) < 1e-9, 'same artwork as the learned reference');
@@ -28,35 +28,45 @@ test('a learned match lifts a card into the shown top 3, marked as from your sca
 
 test('a card shown from both sources appears once, with its best score', () => {
   const weaker = learned('third', grid(3.6));
-  const [lifted] = showLearnedCandidates(official, { artwork, references: [learned('third'), weaker], matcher });
+  const [lifted] = mergeLearnedCandidates(official, { artwork, references: [learned('third'), weaker], matcher });
   assert.equal(lifted.id, 'third');
   assert.equal(lifted.fromLearnedReference, true);
   const strongOfficial = [shown('third', 1), ...official.slice(0, 2)];
-  const candidates = showLearnedCandidates(strongOfficial, { artwork, references: [weaker], matcher });
+  const candidates = mergeLearnedCandidates(strongOfficial, { artwork, references: [weaker], matcher });
   assert.deepEqual(candidates, strongOfficial, 'an official score that is already better stays, unmarked');
-  const all = showLearnedCandidates(official, { artwork, references: [learned('third')], matcher });
+  const all = mergeLearnedCandidates(official, { artwork, references: [learned('third')], matcher });
   assert.deepEqual(all.map((candidate) => candidate.id), ['third', 'first', 'second']);
 });
 
 test('learned references honour the scan set filter', () => {
   const filtered = { ...matcher, cards: [...matcher.cards, card('other', 'SFD')] };
-  const candidates = showLearnedCandidates(official, { artwork, references: [learned('other')], matcher: filtered, setFilter: 'OGN' });
+  const candidates = mergeLearnedCandidates(official, { artwork, references: [learned('other')], matcher: filtered, setFilter: 'OGN' });
   assert.deepEqual(candidates, official);
 });
 
 test('a learned reference for a card no longer in the card database, or of another grid size, is unused', () => {
   const nineCell = Float32Array.from({ length: 27 }, (_, i) => .5 + .4 * Math.sin(i * 1.3));
   const references = [learned('retired'), learned('mine', nineCell, { gridSize: 3 })];
-  assert.deepEqual(showLearnedCandidates(official, { artwork, references, matcher }), official);
+  assert.deepEqual(mergeLearnedCandidates(official, { artwork, references, matcher }), official);
   const two = official.slice(0, 2);
-  assert.deepEqual(showLearnedCandidates(two, { artwork, references, matcher }), two, 'not even in a free slot');
+  assert.deepEqual(mergeLearnedCandidates(two, { artwork, references, matcher }), two, 'not even in a free slot');
+});
+
+test('the scan artwork is not read when no learned reference is usable', () => {
+  let reads = 0;
+  const counted = { features: () => { reads += 1; return scanFeatures; } };
+  const unusable = [learned('retired'), learned('mine', grid(1), { gridSize: 3 }), learned('first', new Float32Array(27))];
+  assert.deepEqual(mergeLearnedCandidates(official, { artwork: counted, references: unusable, matcher }), official);
+  assert.equal(reads, 0);
+  mergeLearnedCandidates(official, { artwork: counted, references: [learned('mine')], matcher });
+  assert.equal(reads, 1);
 });
 
 test('an unused learned reference is used again once its card returns', () => {
   const references = [learned('retired')];
   const updated = { ...matcher, cards: [...matcher.cards, card('retired')] };
-  assert.deepEqual(showLearnedCandidates(official, { artwork, references, matcher }), official);
-  assert.equal(showLearnedCandidates(official, { artwork, references, matcher: updated })[0].id, 'retired');
+  assert.deepEqual(mergeLearnedCandidates(official, { artwork, references, matcher }), official);
+  assert.equal(mergeLearnedCandidates(official, { artwork, references, matcher: updated })[0].id, 'retired');
 });
 
 const textOf = (node) => node == null || typeof node === 'boolean' ? '' : typeof node !== 'object' ? String(node)
@@ -82,11 +92,12 @@ const textured = () => {
 const canvasDocument = () => ({ createElement: () => ({ width: 0, height: 0,
   getContext: () => ({ drawImage() {}, translate() {}, rotate() {}, getImageData: textured }) }) });
 
-async function detectWith(references, ranked) {
+async function detectWith(references, ranked, options = { includeCandidate: true, offerCandidates: true }) {
   const crop = { width: 300, height: 420 };
   const detector = { state: 'ready', initialize: async () => {},
     detect: async () => [{ confidence: 0.99, box: { cx: 250, cy: 350, w: 300, h: 420, angle: 0 }, cropCanvas: crop }] };
-  const liveMatcher = { ...matcher, ready: true, revision: 1, rank: () => ranked, artworkFeatures: () => scanFeatures };
+  const liveMatcher = { ...matcher, ready: true, revision: 1, rank: () => ranked,
+    artworkFeatures: () => { liveMatcher.featureReads += 1; return scanFeatures; }, featureReads: 0 };
   const textVerifier = { reset() {}, getGeometryHint: () => null, observe: () => ({ status: 'pending' }) };
   const runtime = createRuntime({ globals: { document: canvasDocument() }, mocks: {
     'src/lib/yoloDetector.js': { getDetector: () => detector, DetectorState: { READY: 'ready', UNLOADED: 'unloaded', LOADING: 'loading', ERROR: 'error' } },
@@ -98,7 +109,8 @@ async function detectWith(references, ranked) {
   await hook.render({ minSimilarity: 0.9, textVerifier }).initDetector();
   const frame = { width: 800, height: 900, frameId: 1, capturedAt: Date.now(),
     scanRegion: { x: 400, y: 100, guide: { x: 100, y: 100, width: 300, height: 500 } } };
-  return hook.render({ minSimilarity: 0.9, textVerifier }).detectSingleFrame(() => frame, { includeCandidate: true });
+  const result = await hook.render({ minSimilarity: 0.9, textVerifier }).detectSingleFrame(() => frame, options);
+  return Object.assign(result, { featureReads: liveMatcher.featureReads });
 }
 
 const acceptanceInputs = (result) => JSON.parse(JSON.stringify({ cardData: result.cardData, similarity: result.similarity,
@@ -125,4 +137,15 @@ test('a learned reference of the top card never lowers its similarity gap', asyn
   assert.equal(withLearned.reviewCandidates.length, 2, 'the same card is not its own runner-up');
   assert.equal(withLearned.similarityGap, without.similarityGap);
   assert.deepEqual(acceptanceInputs(withLearned), acceptanceInputs(without));
+});
+
+test('a frame that offers no candidates never reads its artwork for learned references', async () => {
+  const ranked = ['first', 'second', 'third'].map((id, index) => ({ card: card(id), similarity: .8 - index / 20 }));
+  const quiet = await detectWith([learned('mine')], ranked, { includeCandidate: true });
+  assert.equal(quiet.featureReads, 0);
+  assert.deepEqual(Array.from(quiet.reviewCandidates, (candidate) => candidate.id), ['first', 'second', 'third']);
+  const offered = await detectWith([learned('mine')], ranked);
+  assert.equal(offered.featureReads, 1);
+  const snapped = await detectWith([learned('mine')], ranked, { includeCandidate: true, includeReview: true });
+  assert.equal(snapped.reviewCandidates[0].id, 'mine', 'Snap review always offers candidates');
 });
