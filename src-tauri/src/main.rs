@@ -4,9 +4,9 @@ use image::{imageops::{self, FilterType}, DynamicImage, RgbImage};
 use directories::ProjectDirs;
 use regex::Regex;
 use reqwest::blocking::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashSet, fs, path::Path, time::Duration};
+use std::{collections::{HashMap, HashSet}, fs, path::Path, time::Duration};
 use tauri::{Emitter, Manager};
 use url::Url;
 #[cfg(any(debug_assertions, test))]
@@ -113,9 +113,30 @@ struct CardHashRecord {
   illustrator: String,
   text: String,
   orientation: String,
-  #[serde(rename = "imageUrl")]
-  image_url: String,
-  f: Vec<f32>,
+  /// The local cached image. Absent on a metadata-only refresh, which keeps the local one.
+  #[serde(rename = "imageUrl", skip_serializing_if = "Option::is_none")]
+  image_url: Option<String>,
+  /// The gallery image the features were (or will stay) computed from.
+  #[serde(rename = "sourceImageUrl")]
+  source_image_url: String,
+  /// Artwork features. Absent on a metadata-only refresh, which keeps the local ones.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  f: Option<Vec<f32>>,
+}
+
+/// A card the local card database already has, with the gallery image it was hashed from
+/// (empty when unknown).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KnownCard {
+  id: String,
+  #[serde(default)]
+  source_image_url: String,
+}
+
+struct GalleryUpdate {
+  cards: Vec<CardHashRecord>,
+  skipped: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -245,16 +266,19 @@ fn fetch_exchange_rates_blocking() -> Result<ExchangeRateInfo, String> {
 #[tauri::command]
 async fn update_card_database(
   app: tauri::AppHandle,
-  existing_card_ids: Vec<String>,
+  known_cards: Vec<KnownCard>,
+  grid_size: usize,
 ) -> Result<String, String> {
-  tauri::async_runtime::spawn_blocking(move || update_card_database_blocking(app, existing_card_ids))
+  // Features from another grid cannot be kept, so every card is then re-hashed.
+  let known_cards = if grid_size == GRID_SIZE { known_cards } else { Vec::new() };
+  tauri::async_runtime::spawn_blocking(move || update_card_database_blocking(app, known_cards))
     .await
     .map_err(|error| format!("Card database update worker failed: {}", error))?
 }
 
 fn update_card_database_blocking(
   app: tauri::AppHandle,
-  existing_card_ids: Vec<String>,
+  known_cards: Vec<KnownCard>,
 ) -> Result<String, String> {
   emit_card_database_progress(
     &app,
@@ -300,54 +324,36 @@ fn update_card_database_blocking(
     return Err("No cards were found in the Riot gallery data.".to_string());
   }
 
-  let existing_ids = existing_card_ids.into_iter()
-    .map(|id| id.trim().to_string())
-    .filter(|id| !id.is_empty())
-    .collect::<HashSet<_>>();
-  let total_gallery_cards = raw_cards.len();
-  let raw_cards = missing_gallery_cards(raw_cards, &existing_ids);
+  let known = known_cards.into_iter()
+    .map(|card| (card.id.trim().to_string(), card.source_image_url.trim().to_string()))
+    .filter(|(id, _)| !id.is_empty())
+    .collect::<HashMap<_, _>>();
   let total_cards = raw_cards.len();
   emit_card_database_progress(
     &app,
     "cards",
-    if total_cards == 0 {
-      format!(
-        "All {} gallery cards are already covered by the local database.",
-        total_gallery_cards
-      )
-    } else {
-      format!(
-        "Found {} gallery cards. Downloading {} missing cards, including additions to existing sets...",
-        total_gallery_cards,
-        total_cards
-      )
-    },
+    format!("Found {} gallery cards. Refreshing card details and downloading new or changed images...", total_cards),
     0,
     total_cards,
-    if total_cards == 0 { 0.90 } else { 0.12 },
+    0.12,
   );
 
-  let mut cards = Vec::new();
-  let mut skipped = 0usize;
-
-  for (index, raw_card) in raw_cards.into_iter().enumerate() {
-    match normalize_card(&raw_card, &client, &cards_cache_dir) {
-      Ok(Some(card)) => cards.push(card),
-      Ok(None) => skipped += 1,
-      Err(_) => skipped += 1,
-    }
-
-    let completed = index + 1;
-    let percent = 0.12 + (completed as f32 / total_cards as f32) * 0.78;
-    emit_card_database_progress(
-      &app,
-      "cards",
-      format!("Processed {}/{} cards ({} skipped)...", completed, total_cards, skipped),
-      completed,
-      total_cards,
-      percent,
-    );
-  }
+  let GalleryUpdate { mut cards, skipped } = gallery_update(
+    raw_cards,
+    &known,
+    &mut |raw, url| hash_gallery_image(raw, url, &client, &cards_cache_dir).ok().flatten(),
+    &mut |completed, total, skipped| {
+      let percent = 0.12 + (completed as f32 / total.max(1) as f32) * 0.78;
+      emit_card_database_progress(
+        &app,
+        "cards",
+        format!("Processed {}/{} cards ({} skipped)...", completed, total, skipped),
+        completed,
+        total,
+        percent,
+      );
+    },
+  );
 
   cards.sort_by(|left, right| {
     left.set
@@ -402,12 +408,53 @@ fn extract_next_data(html: &str) -> Result<Value, String> {
   serde_json::from_str(json_text).map_err(|error| format!("Failed to parse Riot gallery JSON: {}", error))
 }
 
-fn missing_gallery_cards(raw_cards: Vec<Value>, existing_ids: &HashSet<String>) -> Vec<Value> {
+fn gallery_image_url(raw: &Value) -> String {
+  raw
+    .get("cardImage")
+    .and_then(|value| value.get("url"))
+    .and_then(Value::as_str)
+    .unwrap_or("")
+    .trim()
+    .to_string()
+}
+
+/// Records for every gallery card. A known card whose image is unchanged (or whose source
+/// image is unknown) gets a metadata-only record; a new card or a changed image is
+/// downloaded and re-hashed through `hash_image`. A failed download yields no record, so the
+/// local card database keeps the old one. Cards missing from the gallery are not touched.
+fn gallery_update(
+  raw_cards: Vec<Value>,
+  known: &HashMap<String, String>,
+  hash_image: &mut dyn FnMut(&Value, &str) -> Option<(String, Vec<f32>)>,
+  progress: &mut dyn FnMut(usize, usize, usize),
+) -> GalleryUpdate {
   let mut seen_ids = HashSet::new();
-  raw_cards.into_iter().filter(|raw| {
+  let raw_cards = raw_cards.into_iter().filter(|raw| {
     let id = value_to_string(raw.get("id")).trim().to_string();
-    !id.is_empty() && !existing_ids.contains(&id) && seen_ids.insert(id)
-  }).collect()
+    !id.is_empty() && seen_ids.insert(id)
+  }).collect::<Vec<_>>();
+  let total = raw_cards.len();
+  let mut cards = Vec::new();
+  let mut skipped = 0usize;
+
+  for (index, raw) in raw_cards.iter().enumerate() {
+    let id = value_to_string(raw.get("id")).trim().to_string();
+    let url = gallery_image_url(raw);
+    let needs_hash = !url.is_empty() && known.get(&id).map_or(true, |source| !source.is_empty() && *source != url);
+    if needs_hash {
+      match hash_image(raw, &url) {
+        Some((image_path, features)) => cards.push(card_record(raw, image_path, features)),
+        None => skipped += 1,
+      }
+    } else if known.contains_key(&id) {
+      cards.push(metadata_record(raw));
+    } else {
+      skipped += 1;
+    }
+    progress(index + 1, total, skipped);
+  }
+
+  GalleryUpdate { cards, skipped }
 }
 
 fn fetch_list_page(client: &Client, link: &str) -> Result<Value, String> {
@@ -583,21 +630,15 @@ fn round_feature(value: f32) -> f32 {
   (value * 10_000.0).round() / 10_000.0
 }
 
-fn normalize_card(raw: &Value, client: &Client, cards_cache_dir: &Path) -> Result<Option<CardHashRecord>, String> {
-  let card_image_url = raw
-    .get("cardImage")
-    .and_then(|value| value.get("url"))
-    .and_then(Value::as_str)
-    .unwrap_or("")
-    .trim()
-    .to_string();
-
-  if card_image_url.is_empty() {
-    return Ok(None);
-  }
-
+/// Downloads a gallery card image, caches it and returns the cached path and artwork features.
+fn hash_gallery_image(
+  raw: &Value,
+  card_image_url: &str,
+  client: &Client,
+  cards_cache_dir: &Path,
+) -> Result<Option<(String, Vec<f32>)>, String> {
   let raw_image = match client
-    .get(normalize_image_url(&card_image_url))
+    .get(normalize_image_url(card_image_url))
     .send()
     .and_then(|response| response.error_for_status())
     .and_then(|response| response.bytes())
@@ -622,11 +663,17 @@ fn normalize_card(raw: &Value, client: &Client, cards_cache_dir: &Path) -> Resul
     .map_err(|error| format!("Failed to save cached card image {}: {}", image_path.display(), error))?;
 
   let features = compute_color_grid(&image);
-  Ok(Some(card_record(raw, image_path.to_string_lossy().to_string(), features)))
+  Ok(Some((image_path.to_string_lossy().to_string(), features)))
 }
 
 /// The card record for one gallery card, given its cached image and artwork features.
 fn card_record(raw: &Value, image_url: String, features: Vec<f32>) -> CardHashRecord {
+  CardHashRecord { image_url: Some(image_url), f: Some(features), ..metadata_record(raw) }
+}
+
+/// The card record for one gallery card without image path and features, for a card whose
+/// local image and features stay as they are.
+fn metadata_record(raw: &Value) -> CardHashRecord {
   let domains = raw
     .get("domain")
     .and_then(|value| value.get("values"))
@@ -753,8 +800,9 @@ fn card_record(raw: &Value, image_url: String, features: Vec<f32>) -> CardHashRe
     illustrator,
     text,
     orientation,
-    image_url,
-    f: features,
+    image_url: None,
+    source_image_url: gallery_image_url(raw),
+    f: None,
   }
 }
 
@@ -808,31 +856,130 @@ mod tests {
   use serde_json::json;
 
   fn gallery_card(id: &str) -> Value {
-    json!({"id": id, "set": {"value": {"id": "RAD"}}})
+    gallery_card_with(id, &format!("https://cdn.example/{}.png", id), "Text")
+  }
+
+  fn gallery_card_with(id: &str, image_url: &str, text: &str) -> Value {
+    json!({
+      "id": id,
+      "set": {"value": {"id": "RAD"}},
+      "cardImage": {"url": image_url},
+      "text": {"richText": {"body": text}},
+    })
+  }
+
+  fn known(cards: &[(&str, &str)]) -> HashMap<String, String> {
+    cards.iter().map(|(id, url)| (id.to_string(), url.to_string())).collect()
+  }
+
+  /// Runs the update with a fake image download; returns the serialized
+  /// records, the skipped count and the image URLs that were downloaded.
+  fn run_update(
+    gallery: Vec<Value>,
+    known: &HashMap<String, String>,
+    failing_urls: &[&str],
+  ) -> (Vec<Value>, usize, Vec<String>) {
+    let mut downloaded = Vec::new();
+    let update = gallery_update(gallery, known, &mut |raw, url| {
+      downloaded.push(url.to_string());
+      if failing_urls.contains(&url) {
+        return None;
+      }
+      Some((format!("C:/cards/{}.webp", value_to_string(raw.get("id"))), vec![0.5]))
+    }, &mut |_, _, _| {});
+    let cards = update.cards.into_iter().map(|card| serde_json::to_value(card).unwrap()).collect();
+    (cards, update.skipped, downloaded)
   }
 
   #[test]
   fn downloads_later_reveals_from_an_existing_set() {
-    let known = HashSet::from([String::from("rad-001")]);
-    let missing = missing_gallery_cards(vec![gallery_card("rad-001"), gallery_card("rad-002")], &known);
-    assert_eq!(missing.len(), 1);
-    assert_eq!(missing[0]["id"], "rad-002");
+    let (cards, _, downloaded) = run_update(
+      vec![gallery_card("rad-001"), gallery_card("rad-002")],
+      &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
+      &[],
+    );
+    assert_eq!(downloaded, vec!["https://cdn.example/rad-002.png"]);
+    let rad_002 = cards.iter().find(|card| card["id"] == "rad-002").unwrap();
+    assert_eq!(rad_002["imageUrl"], "C:/cards/rad-002.webp");
+    assert_eq!(rad_002["sourceImageUrl"], "https://cdn.example/rad-002.png");
+    assert_eq!(rad_002["f"], json!([0.5]));
+  }
+
+  #[test]
+  fn existing_card_with_changed_text_gets_new_metadata_without_a_download() {
+    let (cards, skipped, downloaded) = run_update(
+      vec![gallery_card_with("rad-001", "https://cdn.example/rad-001.png", "New text")],
+      &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
+      &[],
+    );
+    assert!(downloaded.is_empty());
+    assert_eq!(skipped, 0);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0]["text"], "New text");
+    assert_eq!(cards[0]["sourceImageUrl"], "https://cdn.example/rad-001.png");
+    assert!(cards[0].get("f").is_none(), "features must stay the local ones");
+    assert!(cards[0].get("imageUrl").is_none(), "image path must stay the local one");
+  }
+
+  #[test]
+  fn changed_image_url_triggers_a_rehash() {
+    let (cards, _, downloaded) = run_update(
+      vec![gallery_card_with("rad-001", "https://cdn.example/rad-001-v2.png", "Text")],
+      &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
+      &[],
+    );
+    assert_eq!(downloaded, vec!["https://cdn.example/rad-001-v2.png"]);
+    assert_eq!(cards[0]["f"], json!([0.5]));
+    assert_eq!(cards[0]["sourceImageUrl"], "https://cdn.example/rad-001-v2.png");
+  }
+
+  #[test]
+  fn failed_redownload_keeps_the_old_record() {
+    let (cards, skipped, _) = run_update(
+      vec![gallery_card_with("rad-001", "https://cdn.example/rad-001-v2.png", "New text")],
+      &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
+      &["https://cdn.example/rad-001-v2.png"],
+    );
+    assert!(cards.is_empty(), "no record means the local one is kept unchanged");
+    assert_eq!(skipped, 1);
+  }
+
+  #[test]
+  fn a_card_without_a_known_source_image_is_refreshed_without_a_download() {
+    let (cards, _, downloaded) = run_update(vec![gallery_card("rad-001")], &known(&[("rad-001", "")]), &[]);
+    assert!(downloaded.is_empty());
+    assert_eq!(cards[0]["sourceImageUrl"], "https://cdn.example/rad-001.png");
+    assert!(cards[0].get("f").is_none());
   }
 
   #[test]
   fn retries_cards_that_failed_in_an_earlier_update() {
-    let gallery = vec![gallery_card("rad-001"), gallery_card("rad-002"), gallery_card("rad-003")];
-    let known = HashSet::from([String::from("rad-001"), String::from("rad-003")]);
-    let retry = missing_gallery_cards(gallery.clone(), &known);
-    assert_eq!(retry, vec![gallery_card("rad-002")]);
-    let complete = HashSet::from([String::from("rad-001"), String::from("rad-002"), String::from("rad-003")]);
-    assert!(missing_gallery_cards(gallery, &complete).is_empty());
+    let (cards, skipped, downloaded) = run_update(
+      vec![gallery_card("rad-001"), gallery_card("rad-002")],
+      &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
+      &["https://cdn.example/rad-002.png"],
+    );
+    assert_eq!(downloaded, vec!["https://cdn.example/rad-002.png"]);
+    assert_eq!(skipped, 1);
+    assert_eq!(cards.iter().map(|card| card["id"].clone()).collect::<Vec<_>>(), vec![json!("rad-001")]);
   }
 
   #[test]
   fn ignores_empty_ids_and_duplicate_gallery_rows() {
-    let missing = missing_gallery_cards(vec![json!({}), gallery_card(""), gallery_card("rad-001"), gallery_card("rad-001")], &HashSet::new());
-    assert_eq!(missing, vec![gallery_card("rad-001")]);
+    let (cards, _, downloaded) = run_update(
+      vec![json!({}), gallery_card(""), gallery_card("rad-001"), gallery_card("rad-001")],
+      &HashMap::new(),
+      &[],
+    );
+    assert_eq!(downloaded, vec!["https://cdn.example/rad-001.png"]);
+    assert_eq!(cards.len(), 1);
+  }
+
+  #[test]
+  fn a_new_card_without_an_image_is_skipped() {
+    let (cards, skipped, downloaded) = run_update(vec![json!({"id": "rad-001"})], &HashMap::new(), &[]);
+    assert!(cards.is_empty() && downloaded.is_empty());
+    assert_eq!(skipped, 1);
   }
 
   const GALLERY_SAMPLE: &str = include_str!("../../tests/fixtures/card-gallery-next-data.json");
