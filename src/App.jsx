@@ -29,6 +29,7 @@ import { normalizeCameraProfile } from './lib/cameraControls.js';
 import { isReliableScanResult } from './lib/scanQuality.js';
 import { createUserConfirmedEntry, onUserConfirmed, isDuplicateAdd } from './lib/userConfirmation.js';
 import { getScanArtwork } from './lib/scanEvidence.js';
+import { fullNameOf } from './lib/cardData.js';
 import { createCardEntry, createEntryId, restoreCardEntries, getCardVariantKey, mergeCardEntries, matchesPendingScan } from './lib/collection.js';
 import { persistUserSnapshot } from './lib/userStorage.js';
 import { SCAN_SOUND_STORAGE_KEY } from './lib/scanSound.js';
@@ -164,6 +165,12 @@ export default function App() {
     return normalized && normalized !== 'ALL' ? [normalized] : [];
   });
   const [scanSetOptions, setScanSetOptions] = useState([{ value: 'all', label: 'All sets' }]);
+  // Each card database load also refreshes saved entries' card data by id.
+  const applyCardDatabase = useCallback((cards) => {
+    setScanSetOptions(buildScanSetOptions(cards));
+    setPendingCards((entries) => restoreCardEntries(entries, cards));
+    setScannedCards((entries) => restoreCardEntries(entries, cards));
+  }, []);
 
   const [priceSyncBusy, setPriceSyncBusy] = useState(false);
   const [cardDatabaseBusy, setCardDatabaseBusy] = useState(false);
@@ -381,7 +388,7 @@ export default function App() {
 
     const matcher = getMatcher();
     await matcher.setDatabase(parsed);
-    setScanSetOptions(buildScanSetOptions(matcher.cards));
+    applyCardDatabase(matcher.cards);
 
     const loadedCount = parsed.cards.length;
     showNotification(`Card database updated — ${loadedCount} cards loaded`, 'success');
@@ -390,7 +397,7 @@ export default function App() {
       setInitError(null);
       setInitErrorType(null);
     }
-  }, [initErrorType, showNotification]);
+  }, [applyCardDatabase, initErrorType, showNotification]);
 
   const processCardDatabaseText = useCallback(async (text) => {
     await processCardDatabase(JSON.parse(text));
@@ -443,7 +450,7 @@ export default function App() {
       setLoadStage('matcher');
       const matcher = getMatcher();
       await matcher.initialize();
-      setScanSetOptions(buildScanSetOptions(matcher.cards));
+      applyCardDatabase(matcher.cards);
       setLoadProgress(0.85);
 
       // Done
@@ -458,7 +465,7 @@ export default function App() {
       setInitErrorType(formatted.type);
       setIsLoading(false);
     }
-  }, [detection.initDetector, formatInitError, modelPreference]);
+  }, [applyCardDatabase, detection.initDetector, formatInitError, modelPreference]);
 
   useEffect(() => {
     initializeApp();
@@ -530,7 +537,7 @@ export default function App() {
           detail: 'Refreshing local set filters...',
           progress: 0.98,
         });
-        setScanSetOptions(buildScanSetOptions(getMatcher().cards));
+        applyCardDatabase(getMatcher().cards);
         setUpdateTask({
           title: 'Updating card database',
           detail: 'Card database update complete.',
@@ -549,7 +556,7 @@ export default function App() {
     }
 
     cardDatabaseInputRef.current?.click();
-  }, [cardDatabaseBusy, processCardDatabase, showNotification, yieldToPaint]);
+  }, [applyCardDatabase, cardDatabaseBusy, processCardDatabase, showNotification, yieldToPaint]);
 
   const handleImportCardDatabase = useCallback(() => {
     cardDatabaseInputRef.current?.click();
@@ -563,12 +570,12 @@ export default function App() {
     try {
       const text = await file.text();
       await processCardDatabaseText(text);
-      setScanSetOptions(buildScanSetOptions(getMatcher().cards));
+      applyCardDatabase(getMatcher().cards);
     } catch (error) {
       console.error('[App] Card database import error:', error);
       showNotification(`Card database update failed: ${error.message}`, 'error');
     }
-  }, [processCardDatabaseText, showNotification]);
+  }, [applyCardDatabase, processCardDatabaseText, showNotification]);
 
   const handleImportPriceSnapshot = useCallback(async () => {
     if (priceSyncBusy) {
@@ -876,7 +883,7 @@ export default function App() {
       cardData: entry.cardData,
       priceRecord: priceByCardId.get(entry.cardData.id) || null,
     });
-    showNotification('+ ' + entry.cardData.name + (entry.quantity > 1 ? ' x' + entry.quantity : ''), 'success');
+    showNotification('+ ' + fullNameOf(entry.cardData) + (entry.quantity > 1 ? ' x' + entry.quantity : ''), 'success');
     navigator.vibrate?.(50);
   }, [priceByCardId, recordRecentPendingScan, showNotification]);
 
@@ -995,7 +1002,7 @@ export default function App() {
     // Fake and debug scans never reach the pending list or learned references.
     if (!card?.id || debugEnabled || autoScan.fakeScanEnabled) return false;
     if (isDuplicateAdd(lastAddRef.current, card.id, Date.now())) {
-      showNotification(card.name + ' was just added', 'info');
+      showNotification(fullNameOf(card) + ' was just added', 'info');
       return false;
     }
     lastAddRef.current = { cardId: card.id, at: Date.now() };
@@ -1019,7 +1026,7 @@ export default function App() {
     mergeCardsIntoCollection([card]);
     setPendingCards((prev) => prev.filter((entry) => entry.entryId !== entryId));
     setRecentPendingScanEvents((prev) => prev.filter((event) => !matchesPendingScan(event, card)));
-    showNotification(card.cardData.name + ' added to collection', 'success');
+    showNotification(fullNameOf(card.cardData) + ' added to collection', 'success');
   }, [mergeCardsIntoCollection, pendingCards, showNotification]);
 
   const handleConfirmAllPending = useCallback(() => {
@@ -1088,7 +1095,7 @@ export default function App() {
   const handleAddCardToExport = useCallback((payload) => {
     const entry = createCardEntry(payload, batchDefaultsRef.current);
     mergeCardsIntoCollection([entry]);
-    showNotification('+ ' + entry.cardData.name, 'success');
+    showNotification('+ ' + fullNameOf(entry.cardData), 'success');
   }, [mergeCardsIntoCollection, showNotification]);
 
   const handleAddCardsToExport = useCallback((payloads) => {

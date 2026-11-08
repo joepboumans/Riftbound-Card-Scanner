@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Download, Trash2, Layers, Search, X, ChevronDown } from 'lucide-react';
 import ScannerCardRow from '../scanner/ScannerCardRow.jsx';
+import { fullNameOf } from '../../lib/cardData.js';
 import { getPriceValue as getRecordPriceValue } from '../../lib/priceFormat.js';
 
 const COLLECTION_SORT_OPTIONS = [
@@ -32,9 +33,9 @@ export default function CollectionTab({
 
     const query = searchQuery.toLowerCase().trim();
     return scannedCards.filter(card => {
-      const name = card.cardData.name.toLowerCase();
-      const collectorNumber = card.cardData.collectorNumber.toLowerCase();
-      return name.includes(query) || collectorNumber.includes(query);
+      const { name, code, collectorNumber } = card.cardData;
+      return [fullNameOf(card.cardData), name, code, collectorNumber]
+        .some((field) => String(field || '').toLowerCase().includes(query));
     });
   }, [scannedCards, searchQuery]);
 
@@ -57,7 +58,7 @@ export default function CollectionTab({
       }
 
       if (sortBy === 'name') {
-        const nameDelta = left.cardData.name.localeCompare(right.cardData.name, undefined, { sensitivity: 'base' });
+        const nameDelta = fullNameOf(left.cardData).localeCompare(fullNameOf(right.cardData), undefined, { sensitivity: 'base' });
         if (nameDelta !== 0) return nameDelta;
       }
 
@@ -76,7 +77,7 @@ export default function CollectionTab({
         if (amountDelta !== 0) return amountDelta;
       }
 
-      return left.cardData.name.localeCompare(right.cardData.name, undefined, { sensitivity: 'base' });
+      return fullNameOf(left.cardData).localeCompare(fullNameOf(right.cardData), undefined, { sensitivity: 'base' });
     });
   }, [filteredCards, sortBy, priceByCardId]);
 

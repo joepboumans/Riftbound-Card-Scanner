@@ -1,4 +1,5 @@
 import { isFoilOnly } from '../data/sampleCards.js';
+import { resolveCardData } from './cardData.js';
 
 let nextEntryId = 0;
 
@@ -21,11 +22,14 @@ export function createCardEntry(payload, defaults = {}) {
   };
 }
 
-// Add stable row identities to older localStorage saves without merging rows.
-export function restoreCardEntries(entries = []) {
+// Add stable row identities to older localStorage saves without merging rows,
+// and refresh each entry's card data from the card database by id.
+export function restoreCardEntries(entries = [], cards = []) {
   const usedIds = new Set();
+  const cardsById = new Map(cards.map((card) => [card.id, card]));
   return entries.map((entry) => {
-    const restored = createCardEntry(entry);
+    const current = cardsById.get(entry.cardData?.id);
+    const restored = createCardEntry(current ? { ...entry, cardData: resolveCardData(current) } : entry);
     if (usedIds.has(restored.entryId)) restored.entryId = createEntryId();
     usedIds.add(restored.entryId);
     return restored;
