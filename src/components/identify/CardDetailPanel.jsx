@@ -4,7 +4,7 @@ import { DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from '../../data/sampleCards
 import { getMatcher, resolveCardImageSource } from '../../lib/cardMatcher.js';
 import { formatPrice, getPriceValue } from '../../lib/priceFormat.js';
 import CardImage from '../CardImage.jsx';
-import { fullNameOf, resolveCardData } from '../../lib/cardData.js';
+import { codeLabelOf, fullNameOf, resolveCardData } from '../../lib/cardData.js';
 import { searchCards } from '../../lib/cardSearch.js';
 
 export default function CardDetailPanel({
@@ -88,8 +88,10 @@ export default function CardDetailPanel({
     setSearchQuery('');
   };
 
-  // Search all cards by full name, printed name or code
-  const searchResults = searchOpen ? searchCards(getMatcher().cards, searchQuery).slice(0, 8) : [];
+  // Search all cards by full name, printed name or code, from 2 characters on
+  const searchResults = searchOpen && searchQuery.trim().length >= 2
+    ? searchCards(getMatcher().cards, searchQuery).slice(0, 8)
+    : [];
 
   // Auto-focus search input when opened and scroll into view
   useEffect(() => {
@@ -283,8 +285,7 @@ export default function CardDetailPanel({
               <div>
                 <h3 className="text-base font-bold text-rift-100">{fullNameOf(cardData)}</h3>
                 <p className="text-xs text-rift-400">
-                  {cardData.setName} ({cardData.set}) · {cardData.code || `#${cardData.collectorNumber}`}
-                  {cardData.code && <span className="text-rift-400 ml-1">· {cardData.code}</span>}
+                  {cardData.setName} ({cardData.set}) · {codeLabelOf(cardData)}
                 </p>
               </div>
 

@@ -4,7 +4,7 @@ import { CONDITIONS, LANGUAGES, DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from 
 import { resolveCardImageSource } from '../../lib/cardMatcher.js';
 import { formatPrice, getPriceValue } from '../../lib/priceFormat.js';
 import CardImage from '../CardImage.jsx';
-import { fullNameOf } from '../../lib/cardData.js';
+import { codeLabelOf, fullNameOf } from '../../lib/cardData.js';
 
 const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onRemove, onSplit, priceRecord, priceCurrency = 'EUR', priceExchangeRates }) {
   const { cardData, quantity, condition, language, foil, promo } = card;
@@ -44,7 +44,7 @@ const ScannerCardRow = memo(function ScannerCardRow({ card, index, onUpdate, onR
                 {rarityStyle.label}
               </span>
               <span className="text-[10px] font-mono text-rift-500">
-                {cardData.code || `#${cardData.collectorNumber}`}
+                {codeLabelOf(cardData)}
               </span>
             </div>
             <h4 className="flex-1 text-sm font-semibold text-rift-100 truncate pt-0.5">

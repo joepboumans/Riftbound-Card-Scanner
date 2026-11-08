@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateCSV, generateDeckList, exportFile, exportNotice, EXPORT_FORMATS, EXPORT_FORMAT_OPTIONS } from '../src/lib/csvExporter.js';
+import { generateCSV, generateDeckList, exportFile, exportFileType, exportNotice, copyDeckList, EXPORT_FORMATS, EXPORT_FORMAT_OPTIONS } from '../src/lib/csvExporter.js';
 
 const entry = (cardData, extra = {}) => ({ cardData, quantity: 1, foil: false, ...extra });
 const origins = { set: 'OGN', setName: 'Origins' };
@@ -121,7 +121,7 @@ test('the new exports download as riftbound-gg-<date>.csv and riftbound-deck-<da
   const cards = [entry(fallingStar, { quantity: 2 })];
   const csv = exportFile(cards, EXPORT_FORMATS.RIFTBOUND_GG, date);
   assert.equal(csv.filename, 'riftbound-gg-2026-11-08.csv');
-  assert.equal(csv.content, '﻿CardId,Normal,Foil,Name,Set\r\nOGN-Falling Star,2,0,Falling Star,Origins');
+  assert.equal(csv.content, 'CardId,Normal,Foil,Name,Set\r\nOGN-Falling Star,2,0,Falling Star,Origins');
   const deck = exportFile(cards, EXPORT_FORMATS.DECK_LIST, date);
   assert.equal(deck.filename, 'riftbound-deck-2026-11-08.txt');
   assert.equal(deck.content, 'MainDeck:\n2 Falling Star\n');
@@ -143,4 +143,42 @@ test('deck list with two legends keeps every champion in MainDeck', () => {
     'MainDeck:',
     "1 Kai'Sa, Rebel",
   ].join('\n'));
+});
+
+test('riftbound.gg CSV and deck list files have no BOM; CardNexus and Piltover Archive CSVs keep theirs', () => {
+  const cards = [entry(fallingStar)];
+  assert.ok(!exportFile(cards, EXPORT_FORMATS.RIFTBOUND_GG).content.startsWith('﻿'));
+  assert.ok(!exportFile(cards, EXPORT_FORMATS.DECK_LIST).content.startsWith('﻿'));
+  assert.ok(exportFile(cards, EXPORT_FORMATS.CARDNEXUS).content.startsWith('﻿'));
+  assert.ok(exportFile(cards, EXPORT_FORMATS.PILTOVER).content.startsWith('﻿'));
+});
+
+test('each export format names its file type', () => {
+  assert.equal(exportFileType(EXPORT_FORMATS.CARDNEXUS), 'CSV');
+  assert.equal(exportFileType(EXPORT_FORMATS.PILTOVER), 'CSV');
+  assert.equal(exportFileType(EXPORT_FORMATS.RIFTBOUND_GG), 'CSV');
+  assert.equal(exportFileType(EXPORT_FORMATS.DECK_LIST), 'TXT');
+});
+
+const withClipboard = async (writeText, run) => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value: { clipboard: { writeText } }, configurable: true });
+  try {
+    return await run();
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'navigator', previous);
+    else delete globalThis.navigator;
+  }
+};
+
+test('copying the deck list puts it on the clipboard and says so', async () => {
+  let copied = null;
+  const result = await withClipboard(async (text) => { copied = text; }, () => copyDeckList([entry(fallingStar, { quantity: 2 })]));
+  assert.equal(copied, 'MainDeck:\n2 Falling Star');
+  assert.deepEqual(result, { success: true, message: 'Deck list copied' });
+});
+
+test('a failed deck list copy says the deck list could not be copied', async () => {
+  const result = await withClipboard(async () => { throw new Error('denied'); }, () => copyDeckList([entry(fallingStar)]));
+  assert.deepEqual(result, { success: false, message: 'Could not copy the deck list' });
 });

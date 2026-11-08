@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { Download, Copy, Trash2, Layers, Search, X, ChevronDown } from 'lucide-react';
 import ScannerCardRow from '../scanner/ScannerCardRow.jsx';
-import { fullNameOf } from '../../lib/cardData.js';
-import { EXPORT_FORMATS } from '../../lib/csvExporter.js';
+import { compareByFullName, fullNameOf } from '../../lib/cardData.js';
+import { EXPORT_FORMATS, exportFileType } from '../../lib/csvExporter.js';
 import { getPriceValue as getRecordPriceValue } from '../../lib/priceFormat.js';
 
 const COLLECTION_SORT_OPTIONS = [
@@ -61,7 +61,7 @@ export default function CollectionTab({
       }
 
       if (sortBy === 'name') {
-        const nameDelta = fullNameOf(left.cardData).localeCompare(fullNameOf(right.cardData), undefined, { sensitivity: 'base' });
+        const nameDelta = compareByFullName(left.cardData, right.cardData);
         if (nameDelta !== 0) return nameDelta;
       }
 
@@ -80,7 +80,7 @@ export default function CollectionTab({
         if (amountDelta !== 0) return amountDelta;
       }
 
-      return fullNameOf(left.cardData).localeCompare(fullNameOf(right.cardData), undefined, { sensitivity: 'base' });
+      return compareByFullName(left.cardData, right.cardData);
     });
   }, [filteredCards, sortBy, priceByCardId]);
 
@@ -164,7 +164,7 @@ export default function CollectionTab({
             className="btn-primary text-xs py-2 px-4 rounded-xl"
           >
             <Download className="w-4 h-4" />
-            {exportFormat === EXPORT_FORMATS.DECK_LIST ? 'TXT' : 'CSV'}
+            {exportFileType(exportFormat)}
           </button>
           {exportFormat === EXPORT_FORMATS.DECK_LIST && (
             <button

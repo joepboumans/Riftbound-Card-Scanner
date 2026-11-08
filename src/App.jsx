@@ -1113,12 +1113,8 @@ export default function App() {
   }, [scannedCards, showNotification, exportFormat]);
 
   const handleCopyDeckList = useCallback(async () => {
-    try {
-      await copyDeckList(scannedCards);
-      showNotification('Deck list copied', 'success');
-    } catch {
-      showNotification('Could not copy the deck list', 'error');
-    }
+    const result = await copyDeckList(scannedCards);
+    showNotification(result.message, result.success ? 'success' : 'error');
   }, [scannedCards, showNotification]);
 
   // ─── Render ────────────────────────────────────────────────
