@@ -1,5 +1,6 @@
 import { createCardEntry } from './collection.js';
 import { emitScanDiagnostic } from './scanDiagnostics.js';
+import { getLearnedReferences } from './learnedReferences.js';
 
 // A user-confirmed scan: the user vouches for the card, so no acceptance rule
 // is applied. `rank` is 1-3 for a candidate, null for a card picked by search.
@@ -17,11 +18,12 @@ export function createUserConfirmedEntry(scan, card, { from, rank = null }, defa
   }, defaults);
 }
 
-// Hand-off point to learned references: deciding whether the crop is clear
-// enough, and saving it, belong there. Until then the hand-off is observable
-// through scan diagnostics only.
+// Hand-off point to learned references, which decide whether the crop is
+// clear enough to save. Returns the id of the learned reference it saved, or
+// null, so the pending row can undo it later.
 export function onUserConfirmed(confirmation) {
   emitScanDiagnostic('user-confirmed', confirmation);
+  return getLearnedReferences().save({ cardId: confirmation.card?.id, artwork: confirmation.artwork });
 }
 
 export const CHOICE_STRIP_HOLD_MS = 3000;

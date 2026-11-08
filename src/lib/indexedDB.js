@@ -1,12 +1,12 @@
 /**
  * IndexedDB Storage Layer for Riftbound Scanner
  *
- * Stores the local matcher database and optional price cache.
+ * Stores the local matcher database, optional price cache and learned references.
  * Legacy cards/hash/scan stores remain in the schema for existing users.
  */
 
 const DB_NAME = 'riftbound-scanner';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 const STORES = {
   CARDS: 'cards',           // Card metadata
@@ -15,6 +15,7 @@ const STORES = {
   MATCHER_DB: 'matcher_db',  // Imported card-hashes.json payload
   PRICES: 'prices',          // Cached price snapshot records
   PRICE_SYNC_META: 'price_sync_meta', // Latest price import metadata
+  LEARNED_REFERENCES: 'learnedReferences', // References saved from user-confirmed scans
 };
 
 let dbInstance = null;
@@ -70,6 +71,12 @@ function openDB() {
       // Price sync metadata store
       if (!db.objectStoreNames.contains(STORES.PRICE_SYNC_META)) {
         db.createObjectStore(STORES.PRICE_SYNC_META, { keyPath: 'id' });
+      }
+
+      // Learned references, kept apart from the matcher database so card
+      // database updates never touch them.
+      if (!db.objectStoreNames.contains(STORES.LEARNED_REFERENCES)) {
+        db.createObjectStore(STORES.LEARNED_REFERENCES, { keyPath: 'id' });
       }
     };
 
@@ -203,3 +210,28 @@ export async function loadPriceSyncMeta() {
   });
 }
 
+
+// ─── Learned References ──────────────────────────────────────────────────
+
+export async function loadLearnedReferences() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORES.LEARNED_REFERENCES, 'readonly');
+    const request = tx.objectStore(STORES.LEARNED_REFERENCES).getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = (e) => reject(e.target.error);
+  });
+}
+
+// Removes and stores learned references in one transaction.
+export async function writeLearnedReferences({ put = [], remove = [] } = {}) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORES.LEARNED_REFERENCES, 'readwrite');
+    const store = tx.objectStore(STORES.LEARNED_REFERENCES);
+    for (const id of remove) store.delete(id);
+    for (const record of put) store.put(record);
+    tx.oncomplete = () => resolve();
+    tx.onerror = (e) => reject(e.target.error);
+  });
+}

@@ -145,6 +145,38 @@ test('Snap review opens with a warning on failed quality, and with only search w
   assert.throws(() => f.review(), /Component missing/, 'no outline keeps today\'s notification');
 });
 
+const clearFeatures = Float32Array.from({ length: 12 }, (_, i) => .5 + .4 * Math.sin(i * 1.3));
+const artworkMatcher = { cards: [], artworkFeatures: (crop) => crop.features };
+const scanArtwork = (runtime, quality) => runtime.load('src/lib/learnedReferences.js')
+  .describeScanArtwork({ crop: { features: clearFeatures }, quality, outlined: true, matcher: artworkMatcher });
+
+test('a clear user-confirmed scan saves a learned reference, and its pending row records which one', async () => {
+  const f = appFixture();
+  const { attachScanArtwork } = f.runtime.load('src/lib/scanEvidence.js');
+  const learned = f.runtime.load('src/lib/learnedReferences.js').getLearnedReferences();
+  const scan = attachScanArtwork(weakScan(), scanArtwork(f.runtime, goodQuality));
+  f.scan().onConfirmCandidate(scan, candidates[2], { from: 'overlay', rank: 3 });
+  await learned.settled();
+  const [entry] = f.scan().pendingCards;
+  const [reference] = learned.references();
+  assert.equal(learned.references().length, 1);
+  assert.equal(reference.cardId, third.id);
+  assert.equal(entry.learnedReferenceId, reference.id);
+});
+
+test('a card confirmed in Snap review after a failed quality check never saves a learned reference', async () => {
+  const f = appFixture({ realTimers: true });
+  const { attachScanArtwork } = f.runtime.load('src/lib/scanEvidence.js');
+  const learned = f.runtime.load('src/lib/learnedReferences.js').getLearnedReferences();
+  const blurry = { acceptable: false, issue: 'blurred' };
+  await f.snap(attachScanArtwork(weakScan({ quality: blurry, reason: 'blurred' }), scanArtwork(f.runtime, blurry)));
+  f.review().onSelect(candidates[0], 1);
+  await learned.settled();
+  assert.equal(f.scan().pendingCards.length, 1, 'the user-confirmed row is still queued');
+  assert.equal(f.scan().pendingCards[0].learnedReferenceId, null);
+  assert.equal(learned.references().length, 0);
+});
+
 const gone = { matched: false, reason: 'outside-guide' };
 const strip = (...events) => events.reduce(choiceStripReducer, CHOICE_STRIP_INITIAL);
 const observe = (detection, now) => ({ type: 'observe', detection, now });
