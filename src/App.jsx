@@ -28,6 +28,7 @@ import { isFoilOnly } from './data/sampleCards.js';
 import { normalizeCameraProfile } from './lib/cameraControls.js';
 import { isReliableScanResult } from './lib/scanQuality.js';
 import { createUserConfirmedEntry, onUserConfirmed, isDuplicateAdd } from './lib/userConfirmation.js';
+import { getLearnedReferences } from './lib/learnedReferences.js';
 import { getScanArtwork } from './lib/scanEvidence.js';
 import { createCardEntry, createEntryId, restoreCardEntries, getCardVariantKey, mergeCardEntries, matchesPendingScan } from './lib/collection.js';
 import { persistUserSnapshot } from './lib/userStorage.js';
@@ -1034,6 +1035,8 @@ export default function App() {
     const card = pendingCards.find((entry) => entry.entryId === entryId);
     setPendingCards((prev) => prev.filter((entry) => entry.entryId !== entryId));
     if (card) setRecentPendingScanEvents((prev) => prev.filter((event) => !matchesPendingScan(event, card)));
+    // Undoing a wrong pick: its scan must not teach the matcher.
+    if (card?.learnedReferenceId) getLearnedReferences().remove(card.learnedReferenceId);
   }, [pendingCards]);
 
   const handleAdjustPendingQuantity = useCallback((entryId, delta) => {
@@ -1050,9 +1053,10 @@ export default function App() {
   }, [handleRemovePending, pendingCards, recordRecentPendingScan]);
 
   const handleClearPending = useCallback(() => {
+    for (const entry of pendingCards) if (entry.learnedReferenceId) getLearnedReferences().remove(entry.learnedReferenceId);
     setPendingCards([]);
     setRecentPendingScanEvents([]);
-  }, []);
+  }, [pendingCards]);
 
   const handleUpdateCard = useCallback((index, updatedCard) => {
     setScannedCards((prev) => prev.map((entry, i) => i === index
