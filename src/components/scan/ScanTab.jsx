@@ -9,13 +9,14 @@ import CardDetailPanel from '../identify/CardDetailPanel.jsx';
 import { CardTextIndex } from '../../lib/cardTextIdentity.js';
 import { recognizeCard, buildRecognitionResult, applyTextVerification, matchFromRanking } from '../../lib/cardRecognition.js';
 import { getDetector } from '../../lib/yoloDetector.js';
-import { getMatcher, filterCardsBySet } from '../../lib/cardMatcher.js';
+import { getMatcher } from '../../lib/cardMatcher.js';
 import { downloadCSV, validateForExport } from '../../lib/csvExporter.js';
 import { formatPrice, getPriceValue as getRecordPriceValue } from '../../lib/priceFormat.js';
 import { isFoilOnly } from '../../data/sampleCards.js';
 import { resolveCardData } from '../../lib/cardData.js';
 import { createCardEntry, matchesPendingScan } from '../../lib/collection.js';
 import { getSelectedDetectionEntries } from '../../lib/scanEntries.js';
+import { searchCards } from '../../lib/cardSearch.js';
 
 const PENDING_SORT_OPTIONS = [
   { value: 'original', label: 'Original' },
@@ -86,6 +87,9 @@ export default function ScanTab({
   onCameraViewChange,
   detection,
   onSnapScan,
+  onConfirmCandidate,
+  onSearchCandidate,
+  choiceStripEnabled = false,
   pendingCards,
   recentPendingScanEvents = [],
   onAddPendingCard,
@@ -183,33 +187,7 @@ export default function ScanTab({
 
   const manualCardResults = useMemo(() => {
     const matcher = getMatcher();
-    if (!matcher.ready || !matcher.cards?.length) return [];
-
-    const query = manualCardQuery.trim().toLowerCase();
-    if (query.length < 2) return [];
-
-    const candidates = filterCardsBySet(matcher.cards, scanSetFilter);
-    const matches = candidates.filter((card) => {
-      const fields = [card.name, card.id, card.code, card.set, card.setName, card.collectorNumber, String(card.number || '')];
-      return fields.some((field) => String(field || '').toLowerCase().includes(query));
-    });
-
-    const scoreMatch = (card) => {
-      const fields = [card.name, card.id, card.code, card.set, card.setName, card.collectorNumber, String(card.number || '')];
-      return fields.some((field) => String(field || '').toLowerCase().startsWith(query)) ? 1 : 0;
-    };
-
-    return matches
-      .sort((left, right) => {
-        const scoreDelta = scoreMatch(right) - scoreMatch(left);
-        if (scoreDelta !== 0) return scoreDelta;
-
-        const nameDelta = left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
-        if (nameDelta !== 0) return nameDelta;
-
-        return String(left.id).localeCompare(String(right.id), undefined, { numeric: true, sensitivity: 'base' });
-      })
-      .slice(0, 12);
+    return matcher.ready ? searchCards(matcher.cards, manualCardQuery, scanSetFilter) : [];
   }, [manualCardQuery, scanSetFilter]);
 
   const manualSelectedFoilOnly = manualSelectedCard ? isFoilOnly(manualSelectedCard) : false;
@@ -860,6 +838,10 @@ export default function ScanTab({
             onUpdateScannerExperiments={onUpdateScannerExperiments}
             captureFrame={camera.captureFrame}
             detectSingleFrame={detection.detectSingleFrame}
+            choiceStripEnabled={choiceStripEnabled}
+            lastAddedScan={recentPendingScanEvents[recentPendingScanEvents.length - 1] || null}
+            onConfirmCandidate={onConfirmCandidate}
+            onSearchCandidate={onSearchCandidate}
           />
 
           {/* Mode switcher floating on camera */}

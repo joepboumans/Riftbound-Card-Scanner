@@ -6,6 +6,7 @@ import BottomTabBar from './components/BottomTabBar.jsx';
 import ToastNotification from './components/ToastNotification.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
 import ManualScanReview from './components/scanner/ManualScanReview.jsx';
+import CandidateSearch from './components/scanner/CandidateSearch.jsx';
 import ScanTab from './components/scan/ScanTab.jsx';
 import ScanAddAnimation from './components/scan/ScanAddAnimation.jsx';
 import CollectionTab from './components/collection/CollectionTab.jsx';
@@ -26,6 +27,8 @@ import { FALLBACK_EXCHANGE_RATE_DATE, normalizeExchangeRates, normalizePriceCurr
 import { isFoilOnly } from './data/sampleCards.js';
 import { normalizeCameraProfile } from './lib/cameraControls.js';
 import { isReliableScanResult } from './lib/scanQuality.js';
+import { createUserConfirmedEntry, onUserConfirmed } from './lib/userConfirmation.js';
+import { getScanArtwork } from './lib/scanEvidence.js';
 import { createCardEntry, createEntryId, restoreCardEntries, getCardVariantKey, mergeCardEntries, matchesPendingScan } from './lib/collection.js';
 import { persistUserSnapshot } from './lib/userStorage.js';
 import { SCAN_SOUND_STORAGE_KEY } from './lib/scanSound.js';
@@ -924,9 +927,12 @@ export default function App() {
     if (!value) setScannerExperiments(normalizeScannerExperiments(null));
   }, []);
 
+  // "Not these, search…" for one scan: { scan, from }. Auto scan pauses while it is open.
+  const [candidateSearch, setCandidateSearch] = useState(null);
+
   const autoScan = useAutoScan({
     cameraIsActive: camera.isActive && activeTab === 'scan' && scanCameraVisible,
-    isProcessing: detection.isProcessing || (debugEnabled && debugCapture.pendingCount >= 3),
+    isProcessing: detection.isProcessing || Boolean(candidateSearch) || (debugEnabled && debugCapture.pendingCount >= 3),
     detectSingleFrame: detection.detectSingleFrame,
     captureFrame: camera.captureFrame,
     onCardDetected: handleCardDetected,
@@ -940,7 +946,7 @@ export default function App() {
 
   const snapBusyRef = useRef(false);
   const [manualScanReview, setManualScanReview] = useState(null);
-  useEffect(() => { setManualScanReview(null); }, [activeTab, camera.isActive, scanSetFilter, autoScan.autoScanEnabled, autoScan.fakeScanEnabled]);
+  useEffect(() => { setManualScanReview(null); setCandidateSearch(null); }, [activeTab, camera.isActive, scanSetFilter, autoScan.autoScanEnabled, autoScan.fakeScanEnabled]);
   const autoEnabledRef = useRef(autoScan.autoScanEnabled || autoScan.fakeScanEnabled);
   autoEnabledRef.current = autoScan.autoScanEnabled || autoScan.fakeScanEnabled;
 
@@ -949,25 +955,41 @@ export default function App() {
     snapBusyRef.current = true;
     try {
       textVerifier?.reset();
-      let result;
+      let result, review = null;
       const deadline = Date.now() + 2000;
       do {
         result = await detection.detectSingleFrame(camera.captureFrame, { includeCandidate: true, includeReview: true });
+        // Keep the latest outlined card, preferring one with acceptable quality.
+        const outlined = Boolean(result?.box || result?.reviewCandidates?.length);
+        if (outlined && (result.quality?.acceptable || !review?.quality?.acceptable)) review = result;
         if (passesScanThreshold(result) || !textVerifier ||
-          (result && result.textVerification?.status !== 'pending')) break;
+          (result?.quality?.acceptable && result.textVerification?.status !== 'pending')) break;
         if (Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 125));
       } while (Date.now() < deadline);
 
       if (autoEnabledRef.current) return;
       if (result?.matched && handleCardDetected(result)) {
         autoScan.setLastCardId(result.cardData.id);
-      } else if (result?.quality?.acceptable && result.reviewCandidates?.length) {
-        setManualScanReview(result);
+      } else if (review) {
+        setManualScanReview(review);
       } else {
         showNotification('No card accepted — hold the card steady or review it manually', 'info');
       }
     } finally { snapBusyRef.current = false; }
   }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, showNotification, autoScan, textVerifier, manualScanReview]);
+
+  // The one accept path for the Choice strip and Snap review. It skips the
+  // acceptance rules on purpose: the user vouches for the card.
+  const confirmCandidate = useCallback((scan, card, { from, rank = null }) => {
+    // Fake and debug scans never reach the pending list or learned references.
+    if (!card?.id || debugEnabled || autoScan.fakeScanEnabled) return false;
+    const entry = createUserConfirmedEntry(scan, card, { from, rank }, batchDefaultsRef.current);
+    queuePendingEntry(entry);
+    scanSound.playScanAccepted();
+    autoScan.setLastCardId(card.id);
+    onUserConfirmed({ entry, card: entry.cardData, from, rank, artwork: getScanArtwork(scan) || null });
+    return true;
+  }, [queuePendingEntry, scanSound.playScanAccepted, autoScan, debugEnabled]);
 
   const handleUpdatePendingCard = useCallback((entryId, patch) => {
     setPendingCards((prev) => prev.map((entry) => entry.entryId === entryId
@@ -1110,12 +1132,18 @@ export default function App() {
   return (
     <AppShell>
       {cardDatabaseInput}
-      {manualScanReview && <ManualScanReview result={manualScanReview} onClose={() => setManualScanReview(null)} onSelect={(card) => {
-        queuePendingEntry(createCardEntry({ cardData: card, similarity: card.similarity,
-          confidence: manualScanReview.confidence, manualAdded: true, scanTimestamp: Date.now() }, batchDefaultsRef.current));
-        autoScan.setLastCardId(card.id);
-        setManualScanReview(null);
-      }} />}
+      {manualScanReview && <ManualScanReview result={manualScanReview} onClose={() => setManualScanReview(null)}
+        qualityWarning={manualScanReview.quality?.acceptable === false}
+        onSelect={(card, rank) => {
+          confirmCandidate(manualScanReview, card, { from: 'snap', rank });
+          setManualScanReview(null);
+        }}
+        onSearch={() => { setCandidateSearch({ scan: manualScanReview, from: 'snap' }); setManualScanReview(null); }} />}
+      {candidateSearch && <CandidateSearch setFilter={scanSetFilter} onClose={() => setCandidateSearch(null)}
+        onPick={(card) => {
+          confirmCandidate(candidateSearch.scan, card, { from: candidateSearch.from, rank: null });
+          setCandidateSearch(null);
+        }} />}
 
       {/* Tab content */}
       <div className="flex-1 flex flex-col min-h-0">
@@ -1125,6 +1153,9 @@ export default function App() {
             onCameraViewChange={setScanCameraVisible}
             detection={detection}
             onSnapScan={handleSnapScan}
+            onConfirmCandidate={confirmCandidate}
+            onSearchCandidate={(scan, from) => setCandidateSearch({ scan, from })}
+            choiceStripEnabled={autoScan.autoScanEnabled && !debugEnabled && !autoScan.fakeScanEnabled && !candidateSearch && !manualScanReview}
             pendingCards={pendingCards}
             onAddPendingCard={handleAddPendingCard}
             onUpdatePendingCard={handleUpdatePendingCard}

@@ -9,6 +9,7 @@ import { openDebugScanFolder } from '../../lib/debugScanCapture.js';
 import { getScanEvidence } from '../../lib/scanEvidence.js';
 import { SCANNER_DEBUG_KEY, SCANNER_OVERLAY_KEY, SCANNER_DIAGNOSTICS_AVAILABLE } from '../../lib/scannerExperiments.js';
 import ScanRecordingControls from './ScanRecordingControls.jsx';
+import ChoiceStrip from './ChoiceStrip.jsx';
 
 const DEBUG_OVERLAY_STORAGE_KEY = SCANNER_DEBUG_KEY;
 
@@ -58,6 +59,10 @@ export default function ScannerCamera({
   scannerExperiments = { perspective: true, textVerification: true },
   onUpdateScannerExperiments,
   captureFrame,
+  choiceStripEnabled = false,
+  lastAddedScan = null,
+  onConfirmCandidate,
+  onSearchCandidate,
 }) {
   const [dimensions, setDimensions] = useState({ w: 0, h: 0 });
   const [videoSize, setVideoSize] = useState({ w: 0, h: 0 });
@@ -65,6 +70,7 @@ export default function ScannerCamera({
   const [frameSave, setFrameSave] = useState({ status: 'idle', path: null, error: null });
   const [showScanOverlay, setShowScanOverlay] = useState(() => loadStoredBoolean(SCANNER_OVERLAY_KEY, true));
   const [expiredDetection, setExpiredDetection] = useState(null);
+  const [choiceStripVisible, setChoiceStripVisible] = useState(false);
   const debugOverlayEnabled = SCANNER_DIAGNOSTICS_AVAILABLE && (debugEnabled ?? showDebugOverlay);
   const scanOverlayVisible = scanOverlayEnabled ?? showScanOverlay;
   const trackingOverlayEnabled = scanOverlayVisible || debugOverlayEnabled;
@@ -219,6 +225,14 @@ export default function ScannerCamera({
         autoPlay
       />
 
+      {isActive && (
+        <ChoiceStrip enabled={choiceStripEnabled} detection={lastDetection}
+          lastAddedCardId={lastAddedScan?.cardId} lastAddedAt={lastAddedScan?.scanTimestamp}
+          onPick={(scan, card, rank) => onConfirmCandidate?.(scan, card, { from: 'overlay', rank })}
+          onSearch={(scan) => onSearchCandidate?.(scan, 'overlay')}
+          onVisibleChange={setChoiceStripVisible} />
+      )}
+
       {/* Tap to scan */}
       {isActive && (
         <div className="absolute inset-0" onClick={isProcessing || autoScanEnabled || debugOverlayEnabled ? undefined : onSnapScan}>
@@ -347,7 +361,7 @@ export default function ScannerCamera({
             : 'border-amber-400/30 bg-black/75 text-amber-100'}`}>
             {guidance.message}
           </div>
-          {scanOverlayVisible && !debugOverlayEnabled && hasDetection && lastDetection.cardData && (
+          {scanOverlayVisible && !debugOverlayEnabled && !choiceStripVisible && hasDetection && lastDetection.cardData && (
             <div role="status" aria-label="Tracked card preview" className="flex max-w-[17rem] items-center gap-3 rounded-xl border border-gold-400/30 bg-black/75 p-3 backdrop-blur-sm shadow-lg shadow-black/30">
               <div className="h-24 w-16 shrink-0 overflow-hidden rounded-md bg-rift-800">
                 <CardImage src={resolveCardImageSource(lastDetection.cardData.imageUrl, lastDetection.cardData.id)} alt={lastDetection.cardData.name} className="h-full w-full object-contain" />

@@ -2,10 +2,10 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { getDetector, DetectorState } from '../lib/yoloDetector.js';
 import { CardTextIndex } from '../lib/cardTextIdentity.js';
 import { getMatcher } from '../lib/cardMatcher.js';
-import { recognizeCard, buildRecognitionResult, applyTextVerification } from '../lib/cardRecognition.js';
+import { recognizeCard, buildRecognitionResult, applyTextVerification, rankForReview, reviewCandidatesFor } from '../lib/cardRecognition.js';
 import { hasLocalArtworkSupport } from '../lib/localArtwork.js';
 import { selectGuideDetection, mapDetectionBox } from '../lib/scanGeometry.js';
-import { attachScanEvidence, copyScanEvidence } from '../lib/scanEvidence.js';
+import { attachScanEvidence, attachScanArtwork } from '../lib/scanEvidence.js';
 import { emitScanDiagnostic } from '../lib/scanDiagnostics.js';
 import { isScanFrameCancelled } from '../lib/scanQuality.js';
 import { CardVisualVerifier } from '../lib/cardVisualVerifier.js';
@@ -152,16 +152,27 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
       if (isScanFrameCancelled(frame) || epoch !== epochRef.current || matcher.revision !== matcherRevision) return null;
       const quality = recognition.quality;
       if (frame.scanMoving) { quality.acceptable = false; quality.issue = 'moving'; }
+      // Snap review still gets an outlined card that failed quality or matched
+      // nothing; its candidates are ranked for review, never for acceptance.
+      const withReviewCandidates = (result, rankCandidates) => {
+        if (!options.includeReview) return null;
+        result.reviewCandidates = rankCandidates();
+        attachScanArtwork(result, { crop: recognition.crop, quality });
+        return result;
+      };
       if (!quality.acceptable) {
         textVerifierRef.current?.reset();
-        publish({ ...base, quality, reason: quality.issue });
-        return null;
+        const failed = { ...base, quality, reason: quality.issue };
+        const reviewed = withReviewCandidates(failed, () => rankForReview(recognition.crop, matcher, { setFilter: scanSetFilterRef.current }));
+        publish(failed);
+        return reviewed;
       }
       const matchResult = recognition.match;
       if (!matchResult?.card) {
         textVerifierRef.current?.reset();
-        publish({ ...base, quality, reason: 'low-similarity' });
-        return null;
+        const unmatched = { ...base, quality, reason: 'low-similarity' };
+        publish(unmatched);
+        return withReviewCandidates(unmatched, () => []);
       }
       let result = buildRecognitionResult(matchResult, quality, minSimilarityRef.current, { ...base,
         visualVerification:recognition.visualVerification,
@@ -203,9 +214,10 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
           localStructureSimilarity: entry.localStructureSimilarity, alignedArtworkSimilarity: entry.alignedArtworkSimilarity,
           artworkAlignment: entry.artworkAlignment, similarityGap: entry.similarity - (entry.secondBestSim ?? 0),
         })) });
+      result.reviewCandidates = reviewCandidatesFor(matchResult);
+      attachScanArtwork(result, { crop: recognition.crop, quality });
       publish(result);
-      if (options.includeReview) result = copyScanEvidence(result, { ...result, reviewCandidates: matchResult.top3 || [] });
-      if (result.matched || (options.includeCandidate && (matchResult.similarity >= CANDIDATE_SIMILARITY_FLOOR || hasLocalArtworkSupport(matchResult)))) return result;
+      if (result.matched || options.includeReview || (options.includeCandidate && (matchResult.similarity >= CANDIDATE_SIMILARITY_FLOOR || hasLocalArtworkSupport(matchResult)))) return result;
       return null;
     } catch (error) {
       console.error('[Detection] Frame processing error:', error);

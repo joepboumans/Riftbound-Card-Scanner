@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronDown, Plus, Minus, CheckSquare, Square, Trash2, Sparkles, Search, X } from 'lucide-react';
+import { ChevronDown, Plus, Minus, CheckSquare, Square, Trash2, Sparkles, Search, X, Hand } from 'lucide-react';
 import { DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from '../../data/sampleCards.js';
 import { getMatcher, resolveCardImageSource } from '../../lib/cardMatcher.js';
 import { formatPrice, getPriceValue } from '../../lib/priceFormat.js';
@@ -182,6 +182,12 @@ export default function CardDetailPanel({
             <p className="text-sm font-semibold text-rift-100 truncate">
               {activeMatch ? activeMatch.name : `Detection #${index + 1}`}
             </p>
+            {entry?.userConfirmed && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200"
+                title={entry.candidateRank ? `Picked candidate ${entry.candidateRank} of 3` : 'Picked by search'}>
+                <Hand className="h-3 w-3" /> You picked
+              </span>
+            )}
             {cardData && (
               <div className="space-y-1 min-w-0">
                 <p className="min-w-0 text-[10px] text-rift-400 truncate">

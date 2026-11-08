@@ -66,6 +66,20 @@ export function matchFromRanking(ranked) {
       sim: (entry.similarity * 100).toFixed(1), similarity: entry.similarity })) };
 }
 
+// The top three candidates to show the user. Works for a ranked match and for
+// a single identify() match.
+export function reviewCandidatesFor(match) {
+  if (match?.top3) return match.top3;
+  return match?.card ? [{ ...resolveCardData(match.card), sim: (match.similarity * 100).toFixed(1), similarity: match.similarity }] : [];
+}
+
+// Ranks a crop that failed the quality check, for Snap review only. The result
+// never goes through acceptance, so a blurry card cannot be accepted by itself.
+export function rankForReview(crop, matcher, { setFilter } = {}) {
+  if (!matcher?.ready || !crop) return [];
+  return reviewCandidatesFor(matchFromRanking(matcher.rank(crop, { setFilter, limit: 3 })));
+}
+
 export function buildRecognitionResult(match, quality, minSimilarity = 0.9, base = {}) {
   if (!match?.card) return { ...base, quality, matched: false, reason: 'low-similarity' };
   const threshold = Math.max(0.68, minSimilarity);
