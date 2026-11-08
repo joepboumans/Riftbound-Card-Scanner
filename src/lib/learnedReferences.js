@@ -44,6 +44,31 @@ function rankableFeatures(artwork) {
 }
 
 /**
+ * Settings counts. A reference whose card id is not in the current catalog, or
+ * whose grid size is not the card database's, is kept but unused.
+ */
+export function summarizeLearnedReferences(references, { cards = [], gridSize = null } = {}) {
+  const catalog = new Set(cards.map((card) => card.id));
+  return { references: references.length, cards: new Set(references.map((record) => record.cardId)).size,
+    unused: references.filter((record) => !catalog.has(record.cardId) || record.gridSize !== gridSize).length };
+}
+
+export const LEARNED_REFERENCES_BACKUP_FORMAT = 'riftbound-learned-references';
+export const LEARNED_REFERENCES_BACKUP_VERSION = 1;
+
+// One backup record as a learned reference, or null when it is malformed.
+function readBackupRecord(record) {
+  const gridSize = Number(record?.gridSize);
+  if (typeof record?.cardId !== 'string' || !record.cardId || !Array.isArray(record.features) ||
+    !Number.isInteger(gridSize) || gridSize < 1 || record.features.length !== gridSize * gridSize * 3 ||
+    !record.features.every(Number.isFinite)) return null;
+  return { id: typeof record.id === 'string' && record.id ? record.id : null, cardId: record.cardId,
+    features: Float32Array.from(record.features), gridSize,
+    savedAt: Number.isFinite(record.savedAt) ? record.savedAt : 0,
+    officialSimilarity: Number.isFinite(record.officialSimilarity) ? record.officialSimilarity : null };
+}
+
+/**
  * @param {{ store?: { load(): Promise<object[]>, write(change: { put?: object[], remove?: string[] }): Promise<void> },
  *   now?: () => number, createId?: () => string }} options
  */
@@ -57,18 +82,29 @@ export function createLearnedReferences({ store = indexedDBStore, now = Date.now
     return queue;
   };
 
-  // Applies §3 limits for one card: a near-duplicate is replaced, otherwise the
-  // oldest goes once the card is at its limit.
-  function add(record) {
+  // Applies §3 limits for one card: a near-duplicate is replaced, otherwise
+  // the card keeps its newest references. Resolves to whether `record` was kept
+  // (an imported one can be older than all of a full card's references).
+  async function add(record) {
     const sameCard = records.filter((other) => other.cardId === record.cardId);
     const duplicate = sameCard.find((other) => other.gridSize === record.gridSize &&
       compareFeatures(record.features, other.features).similarity >= LEARNED_REFERENCE_DUPLICATE_SIMILARITY);
-    const removed = duplicate ? [duplicate]
-      : sameCard.sort((a, b) => a.savedAt - b.savedAt).slice(0, Math.max(0, sameCard.length - MAX_LEARNED_REFERENCES_PER_CARD + 1));
+    const removed = duplicate ? [duplicate] : [...sameCard, record].sort((a, b) => a.savedAt - b.savedAt)
+      .slice(0, Math.max(0, sameCard.length + 1 - MAX_LEARNED_REFERENCES_PER_CARD));
+    if (removed.includes(record)) return false;
     const removedIds = new Set(removed.map((other) => other.id));
     records = [...records.filter((other) => !removedIds.has(other.id)), record];
-    return store.write({ put: [record], remove: [...removedIds] });
+    await store.write({ put: [record], remove: [...removedIds] });
+    return true;
   }
+
+  // Deletes the learned references `matches` selects, when there are any.
+  const removeWhere = (matches) => enqueue(() => {
+    const removed = records.filter(matches).map((record) => record.id);
+    if (!removed.length) return;
+    records = records.filter((record) => !matches(record));
+    return store.write({ remove: removed });
+  });
 
   return {
     /**
@@ -83,6 +119,37 @@ export function createLearnedReferences({ store = indexedDBStore, now = Date.now
         savedAt: now(), officialSimilarity: officialSimilarity(features, artwork.officialFeatures?.(cardId)) };
       enqueue(() => add(record));
       return record.id;
+    },
+    /** Undoes one save: deletes the learned reference with this id. */
+    remove: (id) => removeWhere((record) => id != null && record.id === id),
+    /** "Forget my scans of this card": deletes all of the card's learned references. */
+    forgetCard: (cardId) => removeWhere((record) => cardId != null && record.cardId === cardId),
+    /** "Clear all": deletes every learned reference. */
+    clear: () => removeWhere(() => true),
+    /**
+     * The JSON backup of every learned reference. A backup only, not a format
+     * for other apps. `gridSize` is the current card database's.
+     */
+    exportBackup: ({ gridSize = null } = {}) => ({ format: LEARNED_REFERENCES_BACKUP_FORMAT,
+      formatVersion: LEARNED_REFERENCES_BACKUP_VERSION, gridSize,
+      records: records.map((record) => ({ ...record, features: [...record.features] })) }),
+    /**
+     * Merges a backup into the stored learned references, applying the same
+     * per-card limit and duplicate rule as saving. Records already stored are
+     * skipped. Resolves to how many were merged; rejects an invalid backup.
+     */
+    async importBackup(backup) {
+      if (backup?.format !== LEARNED_REFERENCES_BACKUP_FORMAT || backup.formatVersion !== LEARNED_REFERENCES_BACKUP_VERSION ||
+        !Array.isArray(backup.records)) throw new Error('Not a learned references backup');
+      const incoming = backup.records.map(readBackupRecord).filter(Boolean).sort((a, b) => a.savedAt - b.savedAt);
+      let merged = 0;
+      await enqueue(async () => {
+        for (const record of incoming) {
+          if (records.some((other) => other.id === record.id)) continue;
+          if (await add({ ...record, id: record.id ?? createId() })) merged += 1;
+        }
+      });
+      return merged;
     },
     /** Every stored learned reference, for the matcher's learned pass. */
     references: () => records,

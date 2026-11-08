@@ -7,6 +7,7 @@ import { DEFAULT_SCAN_SOUND, normalizeScanSound } from '../../lib/scanSound.js';
 import { DEFAULT_SCAN_MATCHING, SCAN_MATCHING_LIMITS, normalizeScanMatching } from '../../lib/scanMatching.js';
 import { SCANNER_DIAGNOSTICS_AVAILABLE } from '../../lib/scannerExperiments.js';
 import { openDesktopUrl } from '../../lib/desktopBridge.js';
+import LearnedReferencesSettings from './LearnedReferencesSettings.jsx';
 import { FALLBACK_EXCHANGE_RATE_DATE, FALLBACK_ECB_EUR_RATES, PRICE_CURRENCY_OPTIONS, normalizeExchangeRates, normalizePriceCurrency } from '../../lib/priceFormat.js';
 
 const APP_VERSION_LABEL = __APP_RELEASE_VERSION__ || __APP_VERSION__;
@@ -625,6 +626,8 @@ export default function SettingsTab({
             </div>}
           </div>
         </section>
+
+        <LearnedReferencesSettings />
 
         <section className="rounded-2xl bg-rift-800/60 border border-rift-600/20 p-5 space-y-3">
           <h2 className="text-sm font-semibold text-rift-100 flex items-center gap-2">

@@ -164,6 +164,31 @@ test('a clear user-confirmed scan saves a learned reference, and its pending row
   assert.equal(entry.learnedReferenceId, reference.id);
 });
 
+test('removing a user-confirmed pending row deletes the learned reference its scan saved; adding it keeps it', async () => {
+  const f = appFixture();
+  const { attachScanArtwork } = f.runtime.load('src/lib/scanEvidence.js');
+  const learned = f.runtime.load('src/lib/learnedReferences.js').getLearnedReferences();
+  f.scan().onConfirmCandidate(attachScanArtwork(weakScan(), scanArtwork(f.runtime, goodQuality)), candidates[2], { from: 'overlay', rank: 3 });
+  f.scan().onConfirmCandidate(attachScanArtwork(weakScan(), scanArtwork(f.runtime, goodQuality)), candidates[1], { from: 'overlay', rank: 2 });
+  await learned.settled();
+  const [wrong, right] = f.scan().pendingCards;
+  f.scan().onRemovePending(wrong.entryId);
+  f.scan().onConfirmPending(right.entryId);
+  await learned.settled();
+  assert.deepEqual([...learned.references()].map((reference) => reference.id), [right.learnedReferenceId]);
+});
+
+test('clearing the pending list deletes the learned references its user-confirmed rows saved', async () => {
+  const f = appFixture();
+  const { attachScanArtwork } = f.runtime.load('src/lib/scanEvidence.js');
+  const learned = f.runtime.load('src/lib/learnedReferences.js').getLearnedReferences();
+  f.scan().onConfirmCandidate(attachScanArtwork(weakScan(), scanArtwork(f.runtime, goodQuality)), candidates[2], { from: 'overlay', rank: 3 });
+  await learned.settled();
+  f.scan().onClearPending();
+  await learned.settled();
+  assert.equal(learned.references().length, 0);
+});
+
 test('a card confirmed in Snap review after a failed quality check never saves a learned reference', async () => {
   const f = appFixture({ realTimers: true });
   const { attachScanArtwork } = f.runtime.load('src/lib/scanEvidence.js');

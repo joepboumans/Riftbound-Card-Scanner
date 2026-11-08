@@ -5,6 +5,7 @@ import { getMatcher, resolveCardImageSource } from '../../lib/cardMatcher.js';
 import { formatPrice, getPriceValue } from '../../lib/priceFormat.js';
 import CardImage from '../CardImage.jsx';
 import { resolveCardData } from '../../lib/cardData.js';
+import { getLearnedReferences } from '../../lib/learnedReferences.js';
 
 export default function CardDetailPanel({
   detection,
@@ -68,6 +69,11 @@ export default function CardDetailPanel({
   const domainStyle = cardData?.domain ? (DOMAIN_COLORS[cardData.domain] || DOMAIN_COLORS.colorless) : null;
   const rarityStyle = cardData?.rarity ? (RARITY_STYLES[cardData.rarity] || RARITY_STYLES.common) : null;
   const isPendingCard = quantity != null;
+  // Re-render after forgetting; the learned references change in the background.
+  const [forgotten, setForgotten] = useState(false);
+  const learnedScanCount = forgotten || !cardData?.id ? 0
+    : getLearnedReferences().references().filter((record) => record.cardId === cardData.id).length;
+  useEffect(() => { setForgotten(false); }, [cardData?.id]);
 
   const confidenceColor = similarity >= 0.9 ? 'text-green-400 bg-green-400/10'
     : similarity >= 0.85 ? 'text-yellow-400 bg-yellow-400/10'
@@ -683,6 +689,16 @@ export default function CardDetailPanel({
                   </button>
                 )}
               </div>
+              {learnedScanCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { getLearnedReferences().forgetCard(cardData.id); setForgotten(true); }}
+                  className="w-full py-2 rounded-xl text-xs font-medium transition-all btn-ghost text-rift-300 hover:text-red-300"
+                  title="Deletes the artwork saved from your scans of this card. Scanning it falls back to the official card image."
+                >
+                  Forget my scans of this card ({learnedScanCount})
+                </button>
+              )}
             </div>
           )}
 
