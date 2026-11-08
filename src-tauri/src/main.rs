@@ -197,11 +197,7 @@ async fn fetch_exchange_rates() -> Result<ExchangeRateInfo, String> {
 }
 
 fn fetch_exchange_rates_blocking() -> Result<ExchangeRateInfo, String> {
-  let client = Client::builder()
-    .timeout(Duration::from_secs(30))
-    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    .build()
-    .map_err(|error| format!("Failed to initialize HTTP client: {}", error))?;
+  let client = http_client()?;
 
   let response = client
     .get("https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml")
@@ -289,11 +285,7 @@ fn update_card_database_blocking(
     0.02,
   );
 
-  let client = Client::builder()
-    .timeout(Duration::from_secs(30))
-    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    .build()
-    .map_err(|error| format!("Failed to initialize HTTP client: {}", error))?;
+  let client = http_client()?;
 
   let project_dirs = ProjectDirs::from("com", "Teme1999", "RiftboundScanner")
     .ok_or_else(|| "Failed to resolve the application data directory.".to_string())?;
@@ -310,15 +302,7 @@ fn update_card_database_blocking(
     0.04,
   );
 
-  let html = client
-    .get(GALLERY_URL)
-    .send()
-    .and_then(|response| response.error_for_status())
-    .and_then(|response| response.text())
-    .map_err(|error| format!("Failed to download Riot card gallery: {}", error))?;
-
-  let next_data = extract_next_data(&html)?;
-  let raw_cards = extract_cards(&next_data, &mut |link| fetch_list_page(&client, link))?;
+  let raw_cards = fetch_gallery_cards(&client)?;
 
   if raw_cards.is_empty() {
     return Err("No cards were found in the Riot gallery data.".to_string());
@@ -390,6 +374,49 @@ fn update_card_database_blocking(
     0.95,
   );
   Ok(payload)
+}
+
+fn http_client() -> Result<Client, String> {
+  Client::builder()
+    .timeout(Duration::from_secs(30))
+    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    .build()
+    .map_err(|error| format!("Failed to initialize HTTP client: {}", error))
+}
+
+fn fetch_gallery_cards(client: &Client) -> Result<Vec<Value>, String> {
+  let html = client
+    .get(GALLERY_URL)
+    .send()
+    .and_then(|response| response.error_for_status())
+    .and_then(|response| response.text())
+    .map_err(|error| format!("Failed to download Riot card gallery: {}", error))?;
+
+  let next_data = extract_next_data(&html)?;
+  extract_cards(&next_data, &mut |link| fetch_list_page(client, link))
+}
+
+/// New-print check: fetches the gallery and returns the ids missing from the local
+/// card database. Downloads no images and changes nothing.
+#[tauri::command]
+async fn check_new_prints(known_ids: Vec<String>) -> Result<Vec<String>, String> {
+  tauri::async_runtime::spawn_blocking(move || {
+    let local = known_ids.into_iter().map(|id| id.trim().to_string()).collect::<HashSet<_>>();
+    let raw_cards = fetch_gallery_cards(&http_client()?)?;
+    Ok(new_gallery_ids(&raw_cards, &local))
+  })
+  .await
+  .map_err(|error| format!("New-print check worker failed: {}", error))?
+}
+
+/// Gallery ids (in gallery order, once each) that the local card database lacks.
+fn new_gallery_ids(raw_cards: &[Value], local: &HashSet<String>) -> Vec<String> {
+  let mut seen = HashSet::new();
+  raw_cards
+    .iter()
+    .map(|raw| value_to_string(raw.get("id")).trim().to_string())
+    .filter(|id| !id.is_empty() && !local.contains(id) && seen.insert(id.clone()))
+    .collect()
 }
 
 fn extract_next_data(html: &str) -> Result<Value, String> {
@@ -841,11 +868,11 @@ fn main() {
     .plugin(tauri_plugin_updater::Builder::new().build());
   #[cfg(debug_assertions)]
   let app = app.manage(debug_recording::RecordingState::default())
-    .invoke_handler(tauri::generate_handler![runtime_info, update_card_database, fetch_exchange_rates, open_external_url, open_storage_folder,
+    .invoke_handler(tauri::generate_handler![runtime_info, update_card_database, check_new_prints, fetch_exchange_rates, open_external_url, open_storage_folder,
       diagnostic_exports::save_native_frame, diagnostic_exports::save_debug_scan,
       debug_recording::start_debug_recording, debug_recording::append_debug_recording, debug_recording::record_debug_events, debug_recording::finish_debug_recording]);
   #[cfg(not(debug_assertions))]
-  let app = app.invoke_handler(tauri::generate_handler![runtime_info, update_card_database, fetch_exchange_rates, open_external_url, open_storage_folder]);
+  let app = app.invoke_handler(tauri::generate_handler![runtime_info, update_card_database, check_new_prints, fetch_exchange_rates, open_external_url, open_storage_folder]);
   app.run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
@@ -1003,6 +1030,20 @@ mod tests {
       let record = card_record(raw, String::new(), Vec::new());
       json!({"id": record.id, "code": record.code, "subtitle": record.subtitle})
     }).collect())
+  }
+
+  #[test]
+  fn new_gallery_ids_are_the_sample_ids_missing_from_the_local_card_database() {
+    let raw_cards = extract_cards(&gallery_sample(), &mut no_fetch).unwrap();
+    let local = ["ogn-247-298", "unl-t04", "ogn-126-298", "retired-card"]
+      .into_iter().map(str::to_string).collect::<HashSet<_>>();
+    assert_eq!(new_gallery_ids(&raw_cards, &local), vec!["ogn-299-star-298", "rad-sp4-005"]);
+  }
+
+  #[test]
+  fn new_gallery_ids_ignore_blank_and_repeated_ids() {
+    let raw_cards = vec![json!({"id": " rad-001 "}), json!({"id": "rad-001"}), json!({"id": ""}), json!({})];
+    assert_eq!(new_gallery_ids(&raw_cards, &HashSet::new()), vec!["rad-001"]);
   }
 
   #[test]
