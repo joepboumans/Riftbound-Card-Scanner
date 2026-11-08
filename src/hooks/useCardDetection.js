@@ -203,6 +203,7 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
           localStructureSimilarity: entry.localStructureSimilarity, alignedArtworkSimilarity: entry.alignedArtworkSimilarity,
           artworkAlignment: entry.artworkAlignment, similarityGap: entry.similarity - (entry.secondBestSim ?? 0),
         })) });
+      result.prototypeTop3 = matchResult.top3 || []; // PROTOTYPE ONLY: overlay candidate picker
       publish(result);
       if (options.includeReview) result = copyScanEvidence(result, { ...result, reviewCandidates: matchResult.top3 || [] });
       if (result.matched || (options.includeCandidate && (matchResult.similarity >= CANDIDATE_SIMILARITY_FLOOR || hasLocalArtworkSupport(matchResult)))) return result;

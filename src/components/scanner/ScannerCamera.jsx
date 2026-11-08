@@ -9,6 +9,9 @@ import { openDebugScanFolder } from '../../lib/debugScanCapture.js';
 import { getScanEvidence } from '../../lib/scanEvidence.js';
 import { SCANNER_DEBUG_KEY, SCANNER_OVERLAY_KEY, SCANNER_DIAGNOSTICS_AVAILABLE } from '../../lib/scannerExperiments.js';
 import ScanRecordingControls from './ScanRecordingControls.jsx';
+import CandidatePickerPrototype from './CandidatePicker.prototype.jsx'; // PROTOTYPE ONLY
+import { getPrototypeParam } from '../PrototypeSwitcher.jsx'; // PROTOTYPE ONLY
+const PROTOTYPE_PICKER = import.meta.env?.DEV && Boolean(getPrototypeParam('variant')); // PROTOTYPE ONLY
 
 const DEBUG_OVERLAY_STORAGE_KEY = SCANNER_DEBUG_KEY;
 
@@ -219,6 +222,9 @@ export default function ScannerCamera({
         autoPlay
       />
 
+      {/* PROTOTYPE ONLY: overlay candidate picker */}
+      {isActive && PROTOTYPE_PICKER && <CandidatePickerPrototype lastDetection={lastDetection} />}
+
       {/* Tap to scan */}
       {isActive && (
         <div className="absolute inset-0" onClick={isProcessing || autoScanEnabled || debugOverlayEnabled ? undefined : onSnapScan}>
@@ -347,7 +353,7 @@ export default function ScannerCamera({
             : 'border-amber-400/30 bg-black/75 text-amber-100'}`}>
             {guidance.message}
           </div>
-          {scanOverlayVisible && !debugOverlayEnabled && hasDetection && lastDetection.cardData && (
+          {!PROTOTYPE_PICKER && scanOverlayVisible && !debugOverlayEnabled && hasDetection && lastDetection.cardData && (
             <div role="status" aria-label="Tracked card preview" className="flex max-w-[17rem] items-center gap-3 rounded-xl border border-gold-400/30 bg-black/75 p-3 backdrop-blur-sm shadow-lg shadow-black/30">
               <div className="h-24 w-16 shrink-0 overflow-hidden rounded-md bg-rift-800">
                 <CardImage src={resolveCardImageSource(lastDetection.cardData.imageUrl, lastDetection.cardData.id)} alt={lastDetection.cardData.name} className="h-full w-full object-contain" />
