@@ -27,7 +27,7 @@ import { FALLBACK_EXCHANGE_RATE_DATE, normalizeExchangeRates, normalizePriceCurr
 import { isFoilOnly } from './data/sampleCards.js';
 import { normalizeCameraProfile } from './lib/cameraControls.js';
 import { isReliableScanResult } from './lib/scanQuality.js';
-import { createUserConfirmedEntry, onUserConfirmed } from './lib/userConfirmation.js';
+import { createUserConfirmedEntry, onUserConfirmed, isDuplicateAdd } from './lib/userConfirmation.js';
 import { getScanArtwork } from './lib/scanEvidence.js';
 import { createCardEntry, createEntryId, restoreCardEntries, getCardVariantKey, mergeCardEntries, matchesPendingScan } from './lib/collection.js';
 import { persistUserSnapshot } from './lib/userStorage.js';
@@ -876,9 +876,16 @@ export default function App() {
     navigator.vibrate?.(50);
   }, [priceByCardId, recordRecentPendingScan, showNotification]);
 
+  // The last card added by the scanner or by a pick, to drop the same card
+  // added again by the other path a moment later.
+  const lastAddRef = useRef(null);
+
   const handleCardDetected = useCallback((result) => {
     if (result?.acceptedByFakeScan) return false;
     if (!result?.cardData?.id || !passesScanThreshold(result)) return false;
+    // Handled, not added: auto scan locks the card instead of retrying.
+    if (isDuplicateAdd(lastAddRef.current, result.cardData.id, Date.now())) return true;
+    lastAddRef.current = { cardId: result.cardData.id, at: Date.now() };
     queuePendingEntry(createCardEntry({
       cardData: result.cardData,
       confidence: result.confidence,
@@ -983,13 +990,18 @@ export default function App() {
   const confirmCandidate = useCallback((scan, card, { from, rank = null }) => {
     // Fake and debug scans never reach the pending list or learned references.
     if (!card?.id || debugEnabled || autoScan.fakeScanEnabled) return false;
+    if (isDuplicateAdd(lastAddRef.current, card.id, Date.now())) {
+      showNotification(card.name + ' was just added', 'info');
+      return false;
+    }
+    lastAddRef.current = { cardId: card.id, at: Date.now() };
     const entry = createUserConfirmedEntry(scan, card, { from, rank }, batchDefaultsRef.current);
     queuePendingEntry(entry);
     scanSound.playScanAccepted();
     autoScan.setLastCardId(card.id);
     onUserConfirmed({ entry, card: entry.cardData, from, rank, artwork: getScanArtwork(scan) || null });
     return true;
-  }, [queuePendingEntry, scanSound.playScanAccepted, autoScan, debugEnabled]);
+  }, [queuePendingEntry, scanSound.playScanAccepted, autoScan, debugEnabled, showNotification]);
 
   const handleUpdatePendingCard = useCallback((entryId, patch) => {
     setPendingCards((prev) => prev.map((entry) => entry.entryId === entryId

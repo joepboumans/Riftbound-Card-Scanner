@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRuntime, componentProps } from './helpers/runtime.mjs';
 import { resolveCardData } from '../src/lib/cardData.js';
-import { choiceStripReducer, choiceStripView, CHOICE_STRIP_INITIAL, CHOICE_STRIP_HOLD_MS, choiceKeyAction } from '../src/lib/userConfirmation.js';
+import { choiceStripReducer, choiceStripView, CHOICE_STRIP_INITIAL, CHOICE_STRIP_HOLD_MS, choiceKeyAction, DUPLICATE_ADD_WINDOW_MS } from '../src/lib/userConfirmation.js';
 
 const top = resolveCardData({ id: 'ogn-039-298', name: "Kai'Sa", code: 'OGN-039/298', set: 'OGN', rarity: 'rare' });
 const second = resolveCardData({ id: 'ogn-039a-298', name: "Kai'Sa", code: 'OGN-039a/298', set: 'OGN', rarity: 'rare' });
@@ -13,19 +13,26 @@ const goodQuality = { acceptable: true, score: .8 };
 const weakScan = (patch = {}) => ({ cardData: top, matched: false, similarity: .81, similarityGap: .03, confidence: .9,
   quality: goodQuality, box: { cx: 1, cy: 1, w: 1, h: 1, angle: 0 }, reviewCandidates: candidates, ...patch });
 
-function appFixture({ realTimers = false } = {}) {
-  let next = null, calls = 0;
-  const runtime = createRuntime({ globals: realTimers ? { setTimeout, clearTimeout } : {}, mocks: {
+function appFixture({ realTimers = false, clock = null } = {}) {
+  let next = null, calls = 0, autoScanOptions = null;
+  const globals = { ...(realTimers ? { setTimeout, clearTimeout } : {}),
+    ...(clock ? { Date: class extends Date { static now() { return clock.now; } } } : {}) };
+  const mocks = {
     'src/hooks/useCamera.js': { useCamera: () => ({ isActive: true, captureFrame: () => ({}), stopCamera() {} }) },
     'src/hooks/useCardDetection.js': { useCardDetection: () => ({ isProcessing: false,
       detectSingleFrame: async () => { calls++; return next; } }) },
-  } });
+  };
+  const runtime = createRuntime({ globals, mocks });
+  // Wrap the real auto scan to reach the callback it calls when it accepts a card.
+  const realAutoScan = runtime.load('src/hooks/useAutoScan.js');
+  mocks['src/hooks/useAutoScan.js'] = { useAutoScan: (options) => { autoScanOptions = options; return realAutoScan.useAutoScan(options); } };
   const app = runtime.mount(runtime.load('src/App.jsx').default, [false]);
   const tree = () => app.render();
   const scan = () => componentProps(tree(), 'ScanTab');
   const review = () => componentProps(tree(), 'ManualScanReview');
   const snap = async (result) => { next = result; await scan().onSnapScan(); };
-  return { runtime, app, tree, scan, review, snap, get calls() { return calls; } };
+  const autoAccept = (result) => { tree(); return autoScanOptions.onCardDetected(result); };
+  return { runtime, app, tree, scan, review, snap, autoAccept, get calls() { return calls; } };
 }
 
 test('picking a candidate in Snap review queues a user-confirmed entry with its rank', async () => {
@@ -247,4 +254,32 @@ test('the Choice strip closes as soon as the scanner adds the card it was confir
   assert.equal(choiceStripView(state, 1100).candidates, null);
   const other = strip(observe(weakScan(), 1000), { type: 'added', cardId: 'something-else', now: 1100 });
   assert.equal(choiceStripView(other, 1100).candidates.length, 3, 'an unrelated add leaves the strip alone');
+});
+
+const acceptedScan = (cardData = top) => weakScan({ cardData, matched: true, similarity: .96, similarityGap: .1, timestamp: 0 });
+const pendingCopies = (f, id) => f.scan().pendingCards.filter((entry) => entry.cardData.id === id).reduce((sum, entry) => sum + entry.quantity, 0);
+
+test('a pick right after the scanner added the same card is dropped', () => {
+  const clock = { now: 10000 };
+  const f = appFixture({ clock });
+  assert.equal(f.autoAccept(acceptedScan()), true);
+  clock.now += DUPLICATE_ADD_WINDOW_MS - 1;
+  assert.equal(f.scan().onConfirmCandidate(weakScan(), candidates[0], { from: 'overlay', rank: 1 }), false);
+  assert.equal(pendingCopies(f, top.id), 1);
+  assert.equal(f.scan().onConfirmCandidate(weakScan(), candidates[1], { from: 'overlay', rank: 2 }), true, 'a different card is still added');
+  clock.now += 2;
+  assert.equal(f.scan().onConfirmCandidate(weakScan(), candidates[0], { from: 'overlay', rank: 1 }), true, 'after the window a second copy is allowed');
+  assert.equal(pendingCopies(f, top.id), 2);
+});
+
+test('the scanner adding the same card right after a pick is dropped, and counts as handled', () => {
+  const clock = { now: 10000 };
+  const f = appFixture({ clock });
+  f.scan().onConfirmCandidate(weakScan(), candidates[0], { from: 'overlay', rank: 1 });
+  clock.now += DUPLICATE_ADD_WINDOW_MS - 1;
+  assert.equal(f.autoAccept(acceptedScan()), true, 'auto scan locks the card instead of retrying');
+  assert.equal(pendingCopies(f, top.id), 1);
+  clock.now += 2;
+  assert.equal(f.autoAccept(acceptedScan()), true);
+  assert.equal(pendingCopies(f, top.id), 2);
 });
