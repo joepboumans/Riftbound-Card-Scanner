@@ -16,7 +16,7 @@ import { useCardDetection } from './hooks/useCardDetection.js';
 import { useAutoScan } from './hooks/useAutoScan.js';
 import { useScanSound } from './hooks/useScanSound.js';
 import { downloadCSV, copyDeckList, validateForExport, EXPORT_FORMATS } from './lib/csvExporter.js';
-import { getMatcher } from './lib/cardMatcher.js';
+import { getMatcher, mergeCardDatabaseUpdate, sourceImageUrlOf } from './lib/cardMatcher.js';
 import { buildScanSetOptions, summarizeScanSetCoverage } from './lib/scanSets.js';
 import { isDesktopRuntime } from './lib/runtime.js';
 import { invokeDesktopCommand } from './lib/desktopBridge.js';
@@ -84,21 +84,6 @@ function loadFromStorage(key, fallback) {
     console.warn('[Storage] Failed to load:', err);
     return fallback;
   }
-}
-
-function mergeCardDatabases(existingDatabase, updateDatabase) {
-  const cardsById = new Map(
-    (existingDatabase?.cards || []).map((card) => [card.id, card])
-  );
-
-  for (const card of updateDatabase?.cards || []) {
-    cardsById.set(card.id, card);
-  }
-
-  return {
-    gridSize: updateDatabase?.gridSize || existingDatabase?.gridSize,
-    cards: [...cardsById.values()],
-  };
 }
 
 export default function App() {
@@ -484,18 +469,16 @@ export default function App() {
       setCardDatabaseBusy(true);
       setUpdateTask({
         title: 'Updating card database',
-        detail: 'Checking the Riot gallery for missing cards...',
+        detail: 'Checking the Riot gallery for new and changed cards...',
         progress: 0.02,
       });
       await yieldToPaint();
 
       try {
         const matcher = getMatcher();
-        const existingCardIds = [...new Set(
-          matcher.cards
-            .map((card) => String(card.id || '').trim())
-            .filter(Boolean)
-        )];
+        const knownCards = matcher.cards
+          .map((card) => ({ id: String(card.id || '').trim(), sourceImageUrl: sourceImageUrlOf(card) }))
+          .filter((card) => card.id);
         const unlisten = await listen(CARD_DATABASE_PROGRESS_EVENT, (event) => {
           const progress = event.payload || {};
           const percent = Number(progress.percent);
@@ -513,13 +496,13 @@ export default function App() {
 
         let text;
         try {
-          text = await invokeDesktopCommand('update_card_database', { existingCardIds });
+          text = await invokeDesktopCommand('update_card_database', { knownCards, gridSize: matcher.gridSize });
         } finally {
           unlisten();
         }
 
         const updateDatabase = JSON.parse(text);
-        const mergedDatabase = mergeCardDatabases(
+        const mergedDatabase = mergeCardDatabaseUpdate(
           { gridSize: matcher.gridSize, cards: matcher.cards },
           updateDatabase
         );
