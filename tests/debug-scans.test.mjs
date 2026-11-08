@@ -182,5 +182,6 @@ test('debug capture failure and retry do not queue another card or ring again',a
   componentProps(app.render(),'BottomTabBar').onTabChange('settings');const settings=componentProps(app.render(),'SettingsTab');
   assert.equal(settings.onUpdateMinConfidence,undefined);
   const view=runtime.mount(runtime.load('src/components/settings/SettingsTab.jsx').default);const tree=view.render({batchDefaults:{}});
-  assert.equal(nodes(tree,node=>node.type==='input'&&node.props.type==='range'&&node.props.id!=='scan-sound-volume').length,0);
+  assert.deepEqual(nodes(tree,node=>node.type==='input'&&node.props.type==='range'&&node.props.id!=='scan-sound-volume').map(node=>node.props.id),
+    ['scan-min-similarity','scan-min-gap']);
 });

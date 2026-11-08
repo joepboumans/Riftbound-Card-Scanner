@@ -2,7 +2,7 @@ import { hasLocalArtworkSupport } from './localArtwork.js';
 import { hasStrongVisualProof } from './cardVisualProof.js';
 import { hasRuneTextArtwork, hasRuneGeometry } from './cardRuneVerification.js';
 
-export const AUTOMATIC_ARTWORK_MINIMUM = .90;
+export const AUTOMATIC_ARTWORK_MINIMUM = .85;
 export const ARTWORK_SEPARATION = .05;
 export const SCAN_ACCEPTANCE_POLICY = 'joint-evidence-v6';
 
@@ -11,8 +11,10 @@ export const SCAN_ACCEPTANCE_POLICY = 'joint-evidence-v6';
 export function assessScanAcceptance(result, { photo = false, minSimilarity = AUTOMATIC_ARTWORK_MINIMUM } = {}) {
   const requiredTextFrames = photo ? 1 : 2;
   const threshold = Math.max(minSimilarity, result?.minSimilarity || 0);
+  // Recognition records the lead it was asked for; older results used the default.
+  const separation = Number.isFinite(result?.minSimilarityGap) ? result.minSimilarityGap : ARTWORK_SEPARATION;
   const base = { policy: SCAN_ACCEPTANCE_POLICY, phase: 'candidate', eligible: false, path: null,
-    requirements: { standaloneArtwork: threshold, standaloneGap: ARTWORK_SEPARATION,
+    requirements: { standaloneArtwork: threshold, standaloneGap: separation,
       textConfidence: 90, independentTextFrames: requiredTextFrames, visualCandidates: 5,
       independentVisualFrames: result?.similarity >= .96 && result?.similarityGap >= .07 ? 2 : 3 } };
   const fail = reason => ({ ...base, reason });
@@ -58,6 +60,6 @@ export function assessScanAcceptance(result, { photo = false, minSimilarity = AU
   if(result.detectorProposal)return fail('detector-unconfirmed');
   if (result.geometryConflict) return fail('geometry-conflict');
   if (result.similarity < threshold) return fail('low-similarity');
-  if (result.similarityGap < ARTWORK_SEPARATION) return fail('ambiguous');
+  if (result.similarityGap < separation) return fail('ambiguous');
   return { ...base, phase: 'eligible', eligible: true, path: 'distinct-artwork', reason: null };
 }

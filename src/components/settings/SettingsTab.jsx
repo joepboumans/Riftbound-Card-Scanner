@@ -1,9 +1,10 @@
 import React, { useRef } from 'react';
-import { Shield, Sparkles, RotateCcw, Info, ExternalLink, Cpu, Download, Database, Search, RefreshCcw, Camera, Volume2 } from 'lucide-react';
+import { Shield, Sparkles, RotateCcw, Info, ExternalLink, Cpu, Download, Database, Search, RefreshCcw, Camera, Volume2, ScanLine } from 'lucide-react';
 import { CONDITIONS, LANGUAGES } from '../../data/sampleCards.js';
 import { EXPORT_FORMAT_OPTIONS } from '../../lib/csvExporter.js';
 import { CAMERA_PROFILES } from '../../lib/cameraControls.js';
 import { DEFAULT_SCAN_SOUND, normalizeScanSound } from '../../lib/scanSound.js';
+import { DEFAULT_SCAN_MATCHING, SCAN_MATCHING_LIMITS, normalizeScanMatching } from '../../lib/scanMatching.js';
 import { SCANNER_DIAGNOSTICS_AVAILABLE } from '../../lib/scannerExperiments.js';
 import { openDesktopUrl } from '../../lib/desktopBridge.js';
 import { FALLBACK_EXCHANGE_RATE_DATE, FALLBACK_ECB_EUR_RATES, PRICE_CURRENCY_OPTIONS, normalizeExchangeRates, normalizePriceCurrency } from '../../lib/priceFormat.js';
@@ -16,6 +17,8 @@ export default function SettingsTab({
   scanSoundSettings = DEFAULT_SCAN_SOUND,
   onUpdateScanSound,
   onTestScanSound,
+  scanMatchingSettings = DEFAULT_SCAN_MATCHING,
+  onUpdateScanMatching,
   modelPreference,
   onUpdateModelPreference,
   detectorMode = 'unknown',
@@ -51,6 +54,10 @@ export default function SettingsTab({
 }) {
   const scrollRef = useRef(null);
   const scanSound = normalizeScanSound(scanSoundSettings);
+  const scanMatching = normalizeScanMatching(scanMatchingSettings);
+  const scanMatchingIsDefault = scanMatching.minSimilarity === DEFAULT_SCAN_MATCHING.minSimilarity
+    && scanMatching.minSimilarityGap === DEFAULT_SCAN_MATCHING.minSimilarityGap;
+  const percent = (value) => Math.round(value * 100);
   const normalizedPriceCurrency = normalizePriceCurrency(priceCurrency);
   const normalizedExchangeRates = normalizeExchangeRates(priceExchangeRates);
   const selectedExchangeRate = normalizedExchangeRates[normalizedPriceCurrency] || 1;
@@ -263,6 +270,40 @@ export default function SettingsTab({
           <h2 className="text-sm font-semibold text-rift-100">Scanning tips</h2>
           <p className="text-xs text-rift-400 leading-relaxed">Keep one card inside the frame, hold it steady and leave its name and collector code visible. Tilt reflective cards slightly to reduce glare.</p>
           <p className="text-xs text-rift-400">Uncertain scans can be reviewed before adding them. To add another copy of the same card, change its quantity in the pending list.</p>
+        </section>
+
+        <section className="rounded-2xl bg-rift-800/60 border border-rift-600/20 p-5 space-y-4">
+          <h2 className="text-sm font-semibold text-rift-100 flex items-center gap-2">
+            <ScanLine className="w-4 h-4 text-gold-400" />
+            Scan matching
+          </h2>
+          <p className="text-xs text-rift-400">Lower values add cards more readily but may pick the wrong card, especially ones with similar artwork.</p>
+          <div>
+            <label htmlFor="scan-min-similarity" className="flex justify-between text-xs text-rift-300 mb-2">
+              <span>Required artwork match</span><span>{percent(scanMatching.minSimilarity)}%</span>
+            </label>
+            <input id="scan-min-similarity" type="range" step="1"
+              min={percent(SCAN_MATCHING_LIMITS.minSimilarity.min)} max={percent(SCAN_MATCHING_LIMITS.minSimilarity.max)}
+              value={percent(scanMatching.minSimilarity)}
+              onChange={(event) => onUpdateScanMatching?.({ minSimilarity: Number(event.target.value) / 100 })}
+              className="range-slider" />
+            <p className="mt-1 text-[10px] text-rift-500">How closely the artwork must match before a card is added. Default {percent(DEFAULT_SCAN_MATCHING.minSimilarity)}%.</p>
+          </div>
+          <div>
+            <label htmlFor="scan-min-gap" className="flex justify-between text-xs text-rift-300 mb-2">
+              <span>Required lead over next card</span><span>{percent(scanMatching.minSimilarityGap)}%</span>
+            </label>
+            <input id="scan-min-gap" type="range" step="1"
+              min={percent(SCAN_MATCHING_LIMITS.minSimilarityGap.min)} max={percent(SCAN_MATCHING_LIMITS.minSimilarityGap.max)}
+              value={percent(scanMatching.minSimilarityGap)}
+              onChange={(event) => onUpdateScanMatching?.({ minSimilarityGap: Number(event.target.value) / 100 })}
+              className="range-slider" />
+            <p className="mt-1 text-[10px] text-rift-500">How much better the best match must be than the second best. Default {percent(DEFAULT_SCAN_MATCHING.minSimilarityGap)}%.</p>
+          </div>
+          <button type="button" onClick={() => onUpdateScanMatching?.(DEFAULT_SCAN_MATCHING)} disabled={!onUpdateScanMatching || scanMatchingIsDefault}
+            className="btn-ghost w-full rounded-xl text-sm py-2.5">
+            <RotateCcw className="w-4 h-4" />Reset to defaults
+          </button>
         </section>
 
         <section className="rounded-2xl bg-rift-800/60 border border-rift-600/20 p-5 space-y-4">

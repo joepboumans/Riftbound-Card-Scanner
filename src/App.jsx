@@ -36,7 +36,7 @@ import { CardRectifier } from './lib/cardRectifier.js';
 import { CardTextReader } from './lib/cardTextReader.js';
 import { CardTextVerification } from './lib/cardTextVerification.js';
 import { SCANNER_DEBUG_KEY, SCANNER_OVERLAY_KEY, SCANNER_DIAGNOSTICS_AVAILABLE, normalizeScannerExperiments } from './lib/scannerExperiments.js';
-import { AUTOMATIC_ARTWORK_MINIMUM } from './lib/scanAcceptance.js';
+import { SCAN_MATCHING_STORAGE_KEY, normalizeScanMatching } from './lib/scanMatching.js';
 import { saveAcceptedDebugScan } from './lib/debugScanCapture.js';
 import { useScanSessionRecording } from './hooks/useScanSessionRecording.js';
 import { emitScanDiagnostic } from './lib/scanDiagnostics.js';
@@ -127,6 +127,7 @@ export default function App() {
 
   const [debugEnabled, setDebugEnabled] = useState(() => SCANNER_DIAGNOSTICS_AVAILABLE && loadFromStorage(SCANNER_DEBUG_KEY, false) === true);
   const [scanOverlayEnabled, setScanOverlayEnabled] = useState(() => loadFromStorage(SCANNER_OVERLAY_KEY, true) === true);
+  const [scanMatching, setScanMatching] = useState(() => normalizeScanMatching(loadFromStorage(SCAN_MATCHING_STORAGE_KEY, null)));
   const [debugCapture, setDebugCapture] = useState({ status: 'idle' });
   const lastDebugAcceptedRef = useRef(null);
   const debugSaveQueueRef = useRef(null);
@@ -192,6 +193,7 @@ export default function App() {
   }, []);
   useEffect(() => { if(SCANNER_DIAGNOSTICS_AVAILABLE)saveToStorage(SCANNER_DEBUG_KEY, debugEnabled); }, [debugEnabled]);
   useEffect(() => { saveToStorage(SCANNER_OVERLAY_KEY, scanOverlayEnabled); }, [scanOverlayEnabled]);
+  useEffect(() => { saveToStorage(SCAN_MATCHING_STORAGE_KEY, scanMatching); }, [scanMatching]);
   useEffect(() => {
     if (!scannerExperiments.perspective) { rectifierRef.current?.dispose(); rectifierRef.current = null; }
     return () => { rectifierRef.current?.dispose(); rectifierRef.current = null; };
@@ -215,6 +217,7 @@ export default function App() {
 
   const camera = useCamera({ deviceId: cameraDeviceId, profile: cameraProfile });
   const detection = useCardDetection({ scanSetFilter, cropRefiner: scannerExperiments.perspective ? refineCardCrop : null, textVerifier,
+    minSimilarity: scanMatching.minSimilarity, minSimilarityGap: scanMatching.minSimilarityGap,
     recognitionContext: `${cameraDeviceId}:${cameraProfile}:${camera.facingMode}:${activeTab}:${modelPreference}`, cameraIsActive: camera.isActive });
   const scanSound = useScanSound();
   const cardDatabaseInputRef = useRef(null);
@@ -252,6 +255,7 @@ export default function App() {
     [SCAN_SOUND_STORAGE_KEY]: scanSound.settings,
     [SCANNER_DEBUG_KEY]: debugEnabled,
     [SCANNER_OVERLAY_KEY]: scanOverlayEnabled,
+    [SCAN_MATCHING_STORAGE_KEY]: scanMatching,
   };
 
   useEffect(() => {
@@ -849,8 +853,8 @@ export default function App() {
   const batchDefaultsRef = useRef(batchDefaults);
   useEffect(() => { batchDefaultsRef.current = batchDefaults; }, [batchDefaults]);
   const passesScanThreshold = useCallback((result) => {
-    return isReliableScanResult(result, AUTOMATIC_ARTWORK_MINIMUM);
-  }, []);
+    return isReliableScanResult(result, scanMatching.minSimilarity);
+  }, [scanMatching.minSimilarity]);
 
   const recordRecentPendingScan = useCallback((entry, timestamp) => {
     setRecentPendingScanEvents((prev) => [...prev, {
@@ -947,7 +951,7 @@ export default function App() {
     resetRecognition: detection.resetRecognition,
     debugEnabled,
     onDebugAccepted: captureAcceptedDebugScan,
-    recognitionContext: JSON.stringify([activeTab, scanCameraVisible, scanSetFilter, debugEnabled, scannerExperiments,
+    recognitionContext: JSON.stringify([activeTab, scanCameraVisible, scanSetFilter, debugEnabled, scannerExperiments, scanMatching,
       cameraDeviceId, cameraProfile, camera.facingMode, modelPreference, matcher.revision]),
   });
 
@@ -1182,6 +1186,7 @@ export default function App() {
             batchDefaults={batchDefaults}
             scannerExperiments={scannerExperiments}
             onUpdateScannerExperiments={(patch) => setScannerExperiments(previous => normalizeScannerExperiments({ ...previous, ...patch }))}
+            scanMatching={scanMatching}
             textVerifier={textVerifier}
             cropRefiner={scannerExperiments.perspective ? refineCardCrop : null}
             autoScanEnabled={autoScan.autoScanEnabled}
@@ -1224,6 +1229,8 @@ export default function App() {
             onUpdateDefaults={setBatchDefaults}
             scanSoundSettings={scanSound.settings}
             onUpdateScanSound={scanSound.updateSettings}
+            scanMatchingSettings={scanMatching}
+            onUpdateScanMatching={(patch) => setScanMatching(previous => normalizeScanMatching({ ...previous, ...patch }))}
             onTestScanSound={async () => {
               const played = await scanSound.testSound();
               showNotification(played ? 'Test sound played' : 'Sound unavailable. Check your audio output and volume.', played ? 'success' : 'info');

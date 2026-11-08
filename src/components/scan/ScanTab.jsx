@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Camera, Upload, Loader2, RotateCcw, ScanLine, Download, Plus, CheckSquare, Square, Trash2, ChevronsRight, ChevronDown, Search } from 'lucide-react';
 import ScannerCamera from '../scanner/ScannerCamera.jsx';
-import { AUTOMATIC_ARTWORK_MINIMUM } from '../../lib/scanAcceptance.js';
+import { DEFAULT_SCAN_MATCHING } from '../../lib/scanMatching.js';
 import CardCounter from '../scanner/CardCounter.jsx';
 import ImageDropZone from '../identify/ImageDropZone.jsx';
 import DetectionCanvas, { DETECTION_COLORS } from '../identify/DetectionCanvas.jsx';
@@ -105,6 +105,7 @@ export default function ScanTab({
   batchDefaults,
   scannerExperiments,
   onUpdateScannerExperiments,
+  scanMatching = DEFAULT_SCAN_MATCHING,
   cropRefiner = null,
   textVerifier = null,
   autoScanEnabled,
@@ -556,7 +557,8 @@ export default function ScanTab({
         if (epoch !== photoEpochRef.current) return;
         let matchResult = recognition.match;
         let textVerification = null;
-        let recognitionResult = buildRecognitionResult(matchResult, recognition.quality, AUTOMATIC_ARTWORK_MINIMUM, { geometryConflict: recognition.geometryConflict });
+        let recognitionResult = buildRecognitionResult(matchResult, recognition.quality, scanMatching.minSimilarity,
+          { geometryConflict: recognition.geometryConflict }, { minSimilarityGap: scanMatching.minSimilarityGap });
         if (textVerifier && matchResult?.card) {
           textVerification = await textVerifier.verifyPhoto(recognition.textCrop, { hint: matchResult.card,
             alternativeCrops: recognition.alternateTextCrops,
@@ -583,7 +585,7 @@ export default function ScanTab({
       }
 
       const matched = matcher.ready
-        ? results.filter(r => r.matchResult && (r.recognitionResult.matched || r.matchResult.similarity >= AUTOMATIC_ARTWORK_MINIMUM || r.geometryConflict || r.textVerification?.status === 'conflict'))
+        ? results.filter(r => r.matchResult && (r.recognitionResult.matched || r.matchResult.similarity >= scanMatching.minSimilarity || r.geometryConflict || r.textVerification?.status === 'conflict'))
         : results;
       setDetections(matched);
       if (matched.length > 0) {

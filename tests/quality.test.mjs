@@ -4,6 +4,8 @@ import { measureImageQuality, BestFrameBuffer, frameDifference, isReliableScanRe
 import { getScanGuide, getVideoScanRegion, selectGuideDetection, mapDetectionBox, getDetectorLetterbox } from '../src/lib/scanGeometry.js';
 import { openCameraStream, applyCameraAutoModes, supportsTorch, normalizeCameraProfile } from '../src/lib/cameraControls.js';
 import { createRuntime, componentProps } from './helpers/runtime.mjs';
+import { normalizeScanMatching, DEFAULT_SCAN_MATCHING } from '../src/lib/scanMatching.js';
+import { buildRecognitionResult } from '../src/lib/cardRecognition.js';
 
 function pixels(fn, width = 64, height = 88) {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -373,4 +375,24 @@ test('every ranked detection carries its top candidates and artwork crop for the
   const { getScanArtwork } = fixture.runtime.load('src/lib/scanEvidence.js');
   assert.ok(getScanArtwork(result).crop);
   assert.equal(getScanArtwork(result).quality, result.quality);
+});
+
+test('scan matching settings fall back to defaults and stay within safe limits', () => {
+  assert.deepEqual(normalizeScanMatching(null), { ...DEFAULT_SCAN_MATCHING });
+  assert.deepEqual(normalizeScanMatching({ minSimilarity: 0.2, minSimilarityGap: 1 }), { minSimilarity: 0.68, minSimilarityGap: 0.15 });
+  assert.deepEqual(normalizeScanMatching({ minSimilarity: 0.8349, minSimilarityGap: 'x' }), { minSimilarity: 0.83, minSimilarityGap: 0.05 });
+});
+
+test('lowered scan matching settings accept a borderline artwork match', () => {
+  const match = { card: { id: 'ogn-001', name: 'Card' }, similarity: 0.86, secondBestSim: 0.83 };
+  const quality = { acceptable: true };
+  const strict = buildRecognitionResult(match, quality, 0.9);
+  assert.equal(strict.matched, false);
+  assert.equal(strict.reason, 'low-similarity');
+  assert.equal(buildRecognitionResult(match, quality, 0.85).reason, 'ambiguous');
+  const relaxed = buildRecognitionResult(match, quality, 0.85, {}, { minSimilarityGap: 0.02 });
+  assert.equal(relaxed.matched, true);
+  assert.equal(relaxed.acceptanceDecision.requirements.standaloneGap, 0.02);
+  assert.equal(isReliableScanResult(relaxed, 0.85), true);
+  assert.equal(isReliableScanResult(relaxed, 0.9), false);
 });
