@@ -1,3 +1,5 @@
+import copy
+import json
 import pathlib
 import sys
 import tempfile
@@ -8,6 +10,107 @@ from io import BytesIO
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'model'))
 import cards_scraper as scraper
 from PIL import Image
+
+FIXTURES = pathlib.Path(__file__).resolve().parent / 'fixtures'
+GALLERY_SAMPLE = json.loads((FIXTURES / 'card-gallery-next-data.json').read_text(encoding='utf-8'))
+GALLERY_EXPECTED = json.loads((FIXTURES / 'card-gallery-expected.json').read_text(encoding='utf-8'))
+
+
+def gallery_sample():
+    return copy.deepcopy(GALLERY_SAMPLE)
+
+
+def no_fetch(url):
+    raise AssertionError(f'unexpected list API request: {url}')
+
+
+def parsed_summary(next_data, fetch_page=no_fetch):
+    cards = [scraper.normalize_card(raw) for raw in scraper.extract_cards(next_data, fetch_page)]
+    return [{'id': c['id'], 'code': c['public_code'], 'subtitle': c['subtitle']} for c in cards]
+
+
+class GalleryParserTests(unittest.TestCase):
+    def test_sample_gallery_parses_to_the_expected_ids_codes_and_subtitles(self):
+        self.assertEqual(parsed_summary(gallery_sample()), GALLERY_EXPECTED)
+
+    def test_old_page_props_blades_shape_still_parses_through_the_fallback(self):
+        sample = gallery_sample()
+        page = sample['props']['pageProps'].pop('page')
+        gallery = page['blades'][2]
+        gallery['type'] = 'renamedGalleryBlade'
+        extra = copy.deepcopy(gallery['cards']['items'][2])
+        extra.update(id='rad-sp4-005-copy', publicCode='RAD-SP4/005b')
+        gallery['cards']['items'].append(extra)
+        sample['props']['pageProps']['blades'] = page['blades']
+        expected = GALLERY_EXPECTED + [{'id': 'rad-sp4-005-copy', 'code': 'RAD-SP4/005b', 'subtitle': 'Rebel'}]
+        self.assertEqual(parsed_summary(sample), expected)
+
+    def test_paging_is_followed_when_the_page_was_not_fully_prefetched(self):
+        sample = gallery_sample()
+        cards = sample['props']['pageProps']['page']['blades'][2]['cards']
+        items = cards['items']
+        cards['items'] = items[:2]
+        cards['async']['metadata']['prefetchAll'] = False
+        cards['async']['metadata']['totalItems'] = 9999
+        cards['async']['linkdata']['next'] = '/list?from=2'
+        pages = {
+            '/list?from=2': {'items': items[2:4], 'linkdata': {'next': '/list?from=4'}},
+            '/list?from=4': {'items': items[3:], 'linkdata': {'next': None}},
+        }
+        requested = []
+
+        def fetch_page(url):
+            requested.append(url)
+            return copy.deepcopy(pages[url])
+
+        self.assertEqual(parsed_summary(sample, fetch_page), GALLERY_EXPECTED)
+        self.assertEqual(requested, ['/list?from=2', '/list?from=4'])
+
+    def test_a_fully_prefetched_page_never_calls_the_list_api(self):
+        sample = gallery_sample()
+        sample['props']['pageProps']['page']['blades'][2]['cards']['async']['metadata']['totalItems'] = 9999
+        self.assertEqual(parsed_summary(sample), GALLERY_EXPECTED)
+
+
+class CardRecordSubtitleTests(unittest.TestCase):
+    def build_hashes(self, directory, prepare_db=None):
+        root = pathlib.Path(directory)
+        db_path = str(root / 'riftbound.db')
+        hashes_path = root / 'card-hashes.json'
+        if prepare_db:
+            prepare_db(db_path)
+        cards = [scraper.normalize_card(raw) for raw in scraper.extract_cards(gallery_sample(), no_fetch)]
+        for card in cards:
+            card['image_path'] = f"{card['id']}.webp"
+            Image.new('RGB', (80, 110), 'green').save(root / card['image_path'], format='WEBP')
+        conn = scraper.init_db(db_path)
+        scraper.insert_cards(conn, cards)
+        conn.close()
+        with patch.object(scraper, 'DB_PATH', db_path), patch.object(scraper, 'BASE_DIR', directory), \
+                patch.object(scraper, 'HASHES_PATH', str(hashes_path)):
+            scraper.generate_card_hashes()
+        records = json.loads(hashes_path.read_text(encoding='utf-8'))['cards']
+        return {record['id']: record for record in records}
+
+    def test_subtitle_reaches_the_card_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            records = self.build_hashes(directory)
+        self.assertEqual(records['rad-sp4-005']['subtitle'], 'Rebel')
+        self.assertEqual(records['ogn-247-298']['subtitle'], '')
+
+    def test_an_existing_database_without_subtitles_gains_them(self):
+        def old_database(db_path):
+            conn = scraper.sqlite3.connect(db_path)
+            conn.execute('CREATE TABLE cards (id TEXT PRIMARY KEY, name TEXT NOT NULL, collector_number INTEGER, '
+                         'public_code TEXT, set_id TEXT, set_name TEXT, domains TEXT, rarity TEXT, card_type TEXT, '
+                         'energy INTEGER, might INTEGER, tags TEXT, illustrator TEXT, text TEXT, orientation TEXT, '
+                         'image_url TEXT, image_path TEXT)')
+            conn.commit()
+            conn.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            records = self.build_hashes(directory, old_database)
+        self.assertEqual(records['rad-sp4-005']['subtitle'], 'Rebel')
 
 
 class CardImageUpdateTests(unittest.TestCase):

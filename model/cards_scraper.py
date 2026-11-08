@@ -21,6 +21,7 @@ PUBLIC_DIR = os.path.join(BASE_DIR, "..", "public")
 CARDS_DIR = os.path.join(PUBLIC_DIR, "cards")
 HASHES_PATH = os.path.join(PUBLIC_DIR, "card-hashes.json")
 GALLERY_URL = "https://playriftbound.com/en-us/card-gallery/"
+LIST_API_HOST = "https://content.publishing.riotgames.com"
 
 GRID_SIZE = 16 # 16x16 grid = 768 features (256 cells * 3 RGB channels)
 
@@ -69,24 +70,82 @@ def extract_next_data(html: str) -> dict:
     raise RuntimeError("__NEXT_DATA__ not found in the HTML")
 
 
-def extract_cards(next_data: dict) -> list[dict]:
+def fetch_list_page(path: str) -> dict:
+    """
+    Downloads one page of the gallery's paged list API.
+
+    Arguments:
+        path: The `linkdata.next` link, relative to the list API host or absolute.
+
+    Returns:
+        The parsed JSON page.
+    """
+    url = path if path.startswith("http") else LIST_API_HOST + path
+    resp = SESSION.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _gallery_blade(next_data: dict):
+    page = next_data.get("props", {}).get("pageProps", {}).get("page", {})
+    blades = page.get("blades", []) if isinstance(page, dict) else []
+    for blade in blades:
+        if isinstance(blade, dict) and blade.get("type") == "riftboundCardGallery":
+            return blade
+    return None
+
+
+def _next_link(page: dict):
+    """The list API's next-page link, from a blade's `cards` or an API page."""
+    for linkdata in (page.get("async", {}).get("linkdata"), page.get("linkdata")):
+        if isinstance(linkdata, dict) and linkdata.get("next"):
+            return linkdata["next"]
+    return None
+
+
+def _follow_pages(cards: dict, fetch_page) -> list[dict]:
+    """
+    Collects the first page's items and, unless the page says everything was
+    prefetched, every further page of the list API. The card count is never
+    compared with `totalItems` (the API over-counts).
+    """
+    items = list(cards.get("items", []))
+    if cards.get("async", {}).get("metadata", {}).get("prefetchAll") is True:
+        return items
+    seen_links = set()
+    link = _next_link(cards)
+    while link and link not in seen_links:
+        seen_links.add(link)
+        page = fetch_page(link)
+        items.extend(page.get("items", []))
+        link = _next_link(page)
+    unique, seen_ids = [], set()
+    for item in items:
+        card_id = item.get("id") if isinstance(item, dict) else None
+        if card_id in seen_ids:
+            continue
+        seen_ids.add(card_id)
+        unique.append(item)
+    return unique
+
+
+def extract_cards(next_data: dict, fetch_page=fetch_list_page) -> list[dict]:
     """
     Extracts the list of cards from the Next.js JSON data.
 
     Arguments:
         next_data: The parsed JSON data from __NEXT_DATA__.
-    
+        fetch_page: Downloads one list API page; used when the page was not
+            fully prefetched.
+
     Returns:
         A list of raw card dictionaries.
     """
-    blades = next_data.get("props", {}).get("pageProps", {}).get("blades", [])
-    for blade in blades:
-        cards = blade.get("cards", {})
-        if isinstance(cards, dict) and "items" in cards:
-            return cards["items"]
-        if isinstance(cards, list) and len(cards) > 0:
-            return cards
-    
+    blade = _gallery_blade(next_data)
+    cards = blade.get("cards") if blade else None
+    if isinstance(cards, dict) and isinstance(cards.get("items"), list):
+        return _follow_pages(cards, fetch_page)
+
     # Fallback: search recursively
     return _find_cards_recursive(next_data)
 
@@ -271,6 +330,7 @@ def normalize_card(raw: dict) -> dict:
     return {
         "id": card_id,
         "name": raw.get("name", ""),
+        "subtitle": raw.get("subtitle") or "",
         "collector_number": raw.get("collectorNumber", 0),
         "public_code": raw.get("publicCode", ""),
         "set_id": set_id.upper(),
@@ -304,6 +364,7 @@ def init_db(db_path: str) -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS cards (
             id              TEXT PRIMARY KEY,
             name            TEXT NOT NULL,
+            subtitle        TEXT,
             collector_number INTEGER,
             public_code     TEXT,
             set_id          TEXT,
@@ -321,6 +382,10 @@ def init_db(db_path: str) -> sqlite3.Connection:
             image_path      TEXT
         )
     """)
+    # Databases made before subtitles were kept lack the column.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(cards)")}
+    if "subtitle" not in columns:
+        conn.execute("ALTER TABLE cards ADD COLUMN subtitle TEXT")
     conn.commit()
     return conn
 
@@ -335,11 +400,11 @@ def insert_cards(conn: sqlite3.Connection, cards: list[dict]) -> None:
     """
     conn.executemany("""
         INSERT OR REPLACE INTO cards
-        (id, name, collector_number, public_code, set_id, set_name,
+        (id, name, subtitle, collector_number, public_code, set_id, set_name,
          domains, rarity, card_type, energy, might, tags,
          illustrator, text, orientation, image_url, image_path)
         VALUES
-        (:id, :name, :collector_number, :public_code, :set_id, :set_name,
+        (:id, :name, :subtitle, :collector_number, :public_code, :set_id, :set_name,
          :domains, :rarity, :card_type, :energy, :might, :tags,
          :illustrator, :text, :orientation, :image_url, :image_path)
     """, cards)
@@ -490,7 +555,7 @@ def generate_card_hashes() -> None:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT id, name, collector_number, public_code, set_id, set_name, domains, rarity, card_type, energy, might, tags, illustrator, text, orientation, image_url, image_path FROM cards"
+        "SELECT id, name, subtitle, collector_number, public_code, set_id, set_name, domains, rarity, card_type, energy, might, tags, illustrator, text, orientation, image_url, image_path FROM cards"
     ).fetchall()
     conn.close()
 
@@ -529,6 +594,7 @@ def generate_card_hashes() -> None:
         cards.append({
             "id": row["id"],
             "name": row["name"],
+            "subtitle": row["subtitle"] or "",
             "number": row["collector_number"],
             "code": row["public_code"],
             "set": row["set_id"],

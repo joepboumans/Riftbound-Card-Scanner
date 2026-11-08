@@ -15,6 +15,7 @@ mod debug_recording;
 mod diagnostic_exports;
 
 const GALLERY_URL: &str = "https://playriftbound.com/en-us/card-gallery/";
+const LIST_API_HOST: &str = "https://content.publishing.riotgames.com";
 const GRID_SIZE: usize = 16;
 const ART_TOP: f32 = 0.05;
 const ART_BOTTOM: f32 = 0.55;
@@ -95,6 +96,7 @@ struct CardHashesDatabase {
 struct CardHashRecord {
   id: String,
   name: String,
+  subtitle: String,
   number: String,
   code: String,
   set: String,
@@ -292,7 +294,7 @@ fn update_card_database_blocking(
     .map_err(|error| format!("Failed to download Riot card gallery: {}", error))?;
 
   let next_data = extract_next_data(&html)?;
-  let raw_cards = extract_cards(&next_data)?;
+  let raw_cards = extract_cards(&next_data, &mut |link| fetch_list_page(&client, link))?;
 
   if raw_cards.is_empty() {
     return Err("No cards were found in the Riot gallery data.".to_string());
@@ -408,23 +410,69 @@ fn missing_gallery_cards(raw_cards: Vec<Value>, existing_ids: &HashSet<String>) 
   }).collect()
 }
 
-fn extract_cards(next_data: &Value) -> Result<Vec<Value>, String> {
-  if let Some(blades) = next_data
-    .pointer("/props/pageProps/blades")
-    .and_then(Value::as_array)
-  {
-    for blade in blades {
-      if let Some(cards) = blade.get("cards") {
-        if let Some(items) = cards.get("items").and_then(Value::as_array) {
-          return Ok(items.clone());
-        }
+fn fetch_list_page(client: &Client, link: &str) -> Result<Value, String> {
+  let url = if link.starts_with("http") { link.to_string() } else { format!("{}{}", LIST_API_HOST, link) };
+  client
+    .get(&url)
+    .send()
+    .and_then(|response| response.error_for_status())
+    .and_then(|response| response.json::<Value>())
+    .map_err(|error| format!("Failed to download a Riot card gallery page: {}", error))
+}
 
-        if let Some(values) = cards.as_array() {
-          if !values.is_empty() {
-            return Ok(values.clone());
-          }
-        }
-      }
+fn gallery_blade(next_data: &Value) -> Option<&Value> {
+  next_data
+    .pointer("/props/pageProps/page/blades")
+    .and_then(Value::as_array)?
+    .iter()
+    .find(|blade| blade.get("type").and_then(Value::as_str) == Some("riftboundCardGallery"))
+}
+
+/// The list API's next-page link, from a blade's `cards` or an API page.
+fn next_link(page: &Value) -> Option<String> {
+  [page.pointer("/async/linkdata/next"), page.pointer("/linkdata/next")]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .find(|link| !link.is_empty())
+    .map(str::to_string)
+}
+
+/// Collects the first page's items and, unless the page says everything was
+/// prefetched, every further page of the list API. The card count is never
+/// compared with `totalItems` (the API over-counts).
+fn follow_pages(
+  cards: &Value,
+  items: &[Value],
+  fetch_page: &mut dyn FnMut(&str) -> Result<Value, String>,
+) -> Result<Vec<Value>, String> {
+  let mut all = items.to_vec();
+  if cards.pointer("/async/metadata/prefetchAll").and_then(Value::as_bool) == Some(true) {
+    return Ok(all);
+  }
+  let mut seen_links = HashSet::new();
+  let mut link = next_link(cards);
+  while let Some(current) = link {
+    if !seen_links.insert(current.clone()) {
+      break;
+    }
+    let page = fetch_page(&current)?;
+    if let Some(page_items) = page.get("items").and_then(Value::as_array) {
+      all.extend(page_items.iter().cloned());
+    }
+    link = next_link(&page);
+  }
+  let mut seen_ids = HashSet::new();
+  Ok(all.into_iter().filter(|item| seen_ids.insert(value_to_string(item.get("id")))).collect())
+}
+
+fn extract_cards(
+  next_data: &Value,
+  fetch_page: &mut dyn FnMut(&str) -> Result<Value, String>,
+) -> Result<Vec<Value>, String> {
+  if let Some(cards) = gallery_blade(next_data).and_then(|blade| blade.get("cards")) {
+    if let Some(items) = cards.get("items").and_then(Value::as_array) {
+      return follow_pages(cards, items, fetch_page);
     }
   }
 
@@ -548,6 +596,37 @@ fn normalize_card(raw: &Value, client: &Client, cards_cache_dir: &Path) -> Resul
     return Ok(None);
   }
 
+  let raw_image = match client
+    .get(normalize_image_url(&card_image_url))
+    .send()
+    .and_then(|response| response.error_for_status())
+    .and_then(|response| response.bytes())
+  {
+    Ok(bytes) => bytes,
+    Err(_) => return Ok(None),
+  };
+
+  let mut image = match image::load_from_memory(&raw_image) {
+    Ok(image) => image,
+    Err(_) => return Ok(None),
+  };
+
+  if image.width() > image.height() {
+    let rotated = imageops::rotate90(&image.to_rgba8());
+    image = DynamicImage::ImageRgba8(rotated);
+  }
+
+  let image_path = cards_cache_dir.join(format!("{}.webp", raw.get("id").map(|value| value_to_string(Some(value))).unwrap_or_default()));
+  image
+    .save_with_format(&image_path, image::ImageFormat::WebP)
+    .map_err(|error| format!("Failed to save cached card image {}: {}", image_path.display(), error))?;
+
+  let features = compute_color_grid(&image);
+  Ok(Some(card_record(raw, image_path.to_string_lossy().to_string(), features)))
+}
+
+/// The card record for one gallery card, given its cached image and artwork features.
+fn card_record(raw: &Value, image_url: String, features: Vec<f32>) -> CardHashRecord {
   let domains = raw
     .get("domain")
     .and_then(|value| value.get("values"))
@@ -650,36 +729,10 @@ fn normalize_card(raw: &Value, client: &Client, cards_cache_dir: &Path) -> Resul
     .unwrap_or("portrait")
     .to_string();
 
-  let raw_image = match client
-    .get(normalize_image_url(&card_image_url))
-    .send()
-    .and_then(|response| response.error_for_status())
-    .and_then(|response| response.bytes())
-  {
-    Ok(bytes) => bytes,
-    Err(_) => return Ok(None),
-  };
-
-  let mut image = match image::load_from_memory(&raw_image) {
-    Ok(image) => image,
-    Err(_) => return Ok(None),
-  };
-
-  if image.width() > image.height() {
-    let rotated = imageops::rotate90(&image.to_rgba8());
-    image = DynamicImage::ImageRgba8(rotated);
-  }
-
-  let image_path = cards_cache_dir.join(format!("{}.webp", raw.get("id").map(|value| value_to_string(Some(value))).unwrap_or_default()));
-  image
-    .save_with_format(&image_path, image::ImageFormat::WebP)
-    .map_err(|error| format!("Failed to save cached card image {}: {}", image_path.display(), error))?;
-
-  let features = compute_color_grid(&image);
-
-  Ok(Some(CardHashRecord {
+  CardHashRecord {
     id: raw.get("id").map(|value| value_to_string(Some(value))).unwrap_or_default(),
     name: raw.get("name").map(|value| value_to_string(Some(value))).unwrap_or_default(),
+    subtitle: raw.get("subtitle").and_then(Value::as_str).unwrap_or("").to_string(),
     number: raw
       .get("collectorNumber")
       .map(|value| value_to_string(Some(value)))
@@ -700,9 +753,9 @@ fn normalize_card(raw: &Value, client: &Client, cards_cache_dir: &Path) -> Resul
     illustrator,
     text,
     orientation,
-    image_url: image_path.to_string_lossy().to_string(),
+    image_url,
     f: features,
-  }))
+  }
 }
 
 fn normalize_image_url(url: &str) -> String {
@@ -780,6 +833,90 @@ mod tests {
   fn ignores_empty_ids_and_duplicate_gallery_rows() {
     let missing = missing_gallery_cards(vec![json!({}), gallery_card(""), gallery_card("rad-001"), gallery_card("rad-001")], &HashSet::new());
     assert_eq!(missing, vec![gallery_card("rad-001")]);
+  }
+
+  const GALLERY_SAMPLE: &str = include_str!("../../tests/fixtures/card-gallery-next-data.json");
+  const GALLERY_EXPECTED: &str = include_str!("../../tests/fixtures/card-gallery-expected.json");
+
+  fn gallery_sample() -> Value {
+    serde_json::from_str(GALLERY_SAMPLE).unwrap()
+  }
+
+  fn expected_summary() -> Value {
+    serde_json::from_str(GALLERY_EXPECTED).unwrap()
+  }
+
+  fn no_fetch(url: &str) -> Result<Value, String> {
+    panic!("unexpected list API request: {}", url)
+  }
+
+  fn parsed_summary(next_data: &Value, fetch_page: &mut dyn FnMut(&str) -> Result<Value, String>) -> Value {
+    let cards = extract_cards(next_data, fetch_page).unwrap();
+    Value::Array(cards.iter().map(|raw| {
+      let record = card_record(raw, String::new(), Vec::new());
+      json!({"id": record.id, "code": record.code, "subtitle": record.subtitle})
+    }).collect())
+  }
+
+  #[test]
+  fn sample_gallery_parses_to_the_expected_ids_codes_and_subtitles() {
+    assert_eq!(parsed_summary(&gallery_sample(), &mut no_fetch), expected_summary());
+  }
+
+  #[test]
+  fn old_page_props_blades_shape_still_parses_through_the_fallback() {
+    let mut sample = gallery_sample();
+    let mut blades = sample["props"]["pageProps"]["page"]["blades"].take();
+    sample["props"]["pageProps"].as_object_mut().unwrap().remove("page");
+    blades[2]["type"] = json!("renamedGalleryBlade");
+    let mut extra = blades[2]["cards"]["items"][2].clone();
+    extra["id"] = json!("rad-sp4-005-copy");
+    extra["publicCode"] = json!("RAD-SP4/005b");
+    blades[2]["cards"]["items"].as_array_mut().unwrap().push(extra);
+    sample["props"]["pageProps"]["blades"] = blades;
+    let mut expected = expected_summary();
+    expected.as_array_mut().unwrap().push(json!({"id": "rad-sp4-005-copy", "code": "RAD-SP4/005b", "subtitle": "Rebel"}));
+    assert_eq!(parsed_summary(&sample, &mut no_fetch), expected);
+  }
+
+  #[test]
+  fn paging_is_followed_when_the_page_was_not_fully_prefetched() {
+    let mut sample = gallery_sample();
+    let cards = &mut sample["props"]["pageProps"]["page"]["blades"][2]["cards"];
+    let items = cards["items"].as_array().unwrap().clone();
+    cards["items"] = json!(items[..2]);
+    cards["async"]["metadata"]["prefetchAll"] = json!(false);
+    cards["async"]["metadata"]["totalItems"] = json!(9999);
+    cards["async"]["linkdata"]["next"] = json!("/list?from=2");
+    let mut requested = Vec::new();
+    let mut fetch_page = |url: &str| -> Result<Value, String> {
+      requested.push(url.to_string());
+      match url {
+        "/list?from=2" => Ok(json!({"items": items[2..4], "linkdata": {"next": "/list?from=4"}})),
+        "/list?from=4" => Ok(json!({"items": items[3..], "linkdata": {"next": null}})),
+        other => Err(format!("unknown page {}", other)),
+      }
+    };
+    assert_eq!(parsed_summary(&sample, &mut fetch_page), expected_summary());
+    assert_eq!(requested, vec!["/list?from=2", "/list?from=4"]);
+  }
+
+  #[test]
+  fn a_fully_prefetched_page_never_calls_the_list_api() {
+    let mut sample = gallery_sample();
+    sample["props"]["pageProps"]["page"]["blades"][2]["cards"]["async"]["metadata"]["totalItems"] = json!(9999);
+    assert_eq!(parsed_summary(&sample, &mut no_fetch), expected_summary());
+  }
+
+  #[test]
+  fn subtitle_reaches_the_serialized_card_record() {
+    let sample = gallery_sample();
+    let kaisa = &sample["props"]["pageProps"]["page"]["blades"][2]["cards"]["items"][2];
+    let record = serde_json::to_value(card_record(kaisa, "kaisa.webp".to_string(), vec![0.5])).unwrap();
+    assert_eq!(record["name"], "Kai'Sa");
+    assert_eq!(record["subtitle"], "Rebel");
+    assert_eq!(record["code"], "RAD-SP4/005");
+    assert_eq!(record["imageUrl"], "kaisa.webp");
   }
 
 }
