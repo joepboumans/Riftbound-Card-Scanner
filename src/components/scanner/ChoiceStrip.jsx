@@ -24,6 +24,7 @@ export function CandidateTile({ card, rank, onPick, confirming = false, classNam
       <span className="block truncate text-[10px] text-rift-300">{card.code || card.id}</span>
       <span className="mt-1 block h-1 rounded bg-white/10"><span className="block h-full rounded bg-gold-400" style={{ width: percent(card) }} /></span>
       <span className="block text-[10px] text-rift-300">{percent(card)} match</span>
+      {card.fromLearnedReference && <span className="block truncate text-[10px] text-gold-300">from your scans</span>}
     </button>
   );
 }

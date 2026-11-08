@@ -6,7 +6,8 @@ import { recognizeCard, buildRecognitionResult, applyTextVerification, rankForRe
 import { hasLocalArtworkSupport } from '../lib/localArtwork.js';
 import { selectGuideDetection, mapDetectionBox } from '../lib/scanGeometry.js';
 import { attachScanEvidence, attachScanArtwork } from '../lib/scanEvidence.js';
-import { describeScanArtwork } from '../lib/learnedReferences.js';
+import { describeScanArtwork, getLearnedReferences } from '../lib/learnedReferences.js';
+import { showLearnedCandidates } from '../lib/learnedCandidates.js';
 import { emitScanDiagnostic } from '../lib/scanDiagnostics.js';
 import { isScanFrameCancelled } from '../lib/scanQuality.js';
 import { CardVisualVerifier } from '../lib/cardVisualVerifier.js';
@@ -155,13 +156,20 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
       if (isScanFrameCancelled(frame) || epoch !== epochRef.current || matcher.revision !== matcherRevision) return null;
       const quality = recognition.quality;
       if (frame.scanMoving) { quality.acceptable = false; quality.issue = 'moving'; }
+      // The candidates shown to the user (Choice strip, Snap review), with
+      // learned references merged in. Set after acceptance, which never sees them.
+      const showCandidates = (result, officialCandidates) => {
+        const artwork = describeScanArtwork({ crop: recognition.crop, quality, matcher,
+          outlined: !bestDetection.detectorProposal, areaSampling: recognition.artworkSampling === 'area' });
+        result.reviewCandidates = showLearnedCandidates(officialCandidates, { artwork, matcher,
+          references: getLearnedReferences().references(), setFilter: scanSetFilterRef.current });
+        attachScanArtwork(result, artwork);
+      };
       // Snap review still gets an outlined card that failed quality or matched
       // nothing; its candidates are ranked for review, never for acceptance.
       const withReviewCandidates = (result, rankCandidates) => {
         if (!options.includeReview) return null;
-        result.reviewCandidates = rankCandidates();
-        attachScanArtwork(result, describeScanArtwork({ crop: recognition.crop, quality, matcher,
-          outlined: !bestDetection.detectorProposal, areaSampling: recognition.artworkSampling === 'area' }));
+        showCandidates(result, rankCandidates());
         return result;
       };
       if (!quality.acceptable) {
@@ -219,9 +227,7 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
           localStructureSimilarity: entry.localStructureSimilarity, alignedArtworkSimilarity: entry.alignedArtworkSimilarity,
           artworkAlignment: entry.artworkAlignment, similarityGap: entry.similarity - (entry.secondBestSim ?? 0),
         })) });
-      result.reviewCandidates = reviewCandidatesFor(matchResult);
-      attachScanArtwork(result, describeScanArtwork({ crop: recognition.crop, quality, matcher,
-        outlined: !bestDetection.detectorProposal, areaSampling: recognition.artworkSampling === 'area' }));
+      showCandidates(result, reviewCandidatesFor(matchResult));
       publish(result);
       if (result.matched || options.includeReview || (options.includeCandidate && (matchResult.similarity >= CANDIDATE_SIMILARITY_FLOOR || hasLocalArtworkSupport(matchResult)))) return result;
       return null;
