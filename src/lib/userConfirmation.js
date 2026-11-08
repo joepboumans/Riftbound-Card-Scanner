@@ -25,10 +25,20 @@ export function onUserConfirmed(confirmation) {
 }
 
 export const CHOICE_STRIP_HOLD_MS = 3000;
-export const CHOICE_STRIP_INITIAL = Object.freeze({ candidates: null, scan: null, seenAt: 0, live: false, frozen: false, suppressedIds: [] });
+export const CHOICE_STRIP_INITIAL = Object.freeze({ candidates: null, scan: null, seenAt: 0, live: false, frozen: false, suppressedIds: [], confirmingId: null });
+
+// The top three candidates of a detection. While the scanner is confirming a
+// card (a matched frame), that card is always among them.
+function offeredCandidates(detection) {
+  const candidates = detection.reviewCandidates || [];
+  if (detection.matched && detection.cardData?.id && !candidates.slice(0, 3).some((card) => card.id === detection.cardData.id))
+    return [{ ...detection.cardData, similarity: detection.similarity }, ...candidates].slice(0, 3);
+  return candidates.length ? candidates.slice(0, 3) : null;
+}
 
 // Choice strip state, driven by each published detection. It offers the top
-// three candidates of a card the scanner shows but will not accept, holds them
+// three candidates of a card the scanner has not accepted (marking the one it
+// is confirming, if any), holds them
 // for CHOICE_STRIP_HOLD_MS after that card leaves the frame, and freezes while
 // the pointer is over the strip.
 export function choiceStripReducer(state, event) {
@@ -37,22 +47,26 @@ export function choiceStripReducer(state, event) {
       const detection = event.detection;
       // The card left the frame: it may be offered again.
       if (!detection?.box) state = { ...state, suppressedIds: [] };
-      if (detection?.box && detection.matched && !state.frozen) return { ...state, candidates: null, scan: null, live: false };
-      const offered = detection?.box && !detection.matched && detection.reviewCandidates?.length &&
-        !state.suppressedIds.includes(detection.reviewCandidates[0].id) ? detection.reviewCandidates.slice(0, 3) : null;
-      if (!offered) return { ...state, live: false, seenAt: state.live ? event.now : state.seenAt };
-      if (state.frozen && state.candidates) return state;
-      return { ...state, candidates: offered, scan: detection, seenAt: event.now, live: true };
+      const offered = detection?.box ? offeredCandidates(detection) : null;
+      if (!offered || state.suppressedIds.includes(detection.matched ? detection.cardData.id : offered[0].id))
+        return { ...state, live: false, confirmingId: null, seenAt: state.live ? event.now : state.seenAt };
+      const confirmingId = detection.matched ? detection.cardData.id : null;
+      if (state.frozen && state.candidates) return { ...state, confirmingId };
+      return { ...state, candidates: offered, scan: detection, seenAt: event.now, live: true, confirmingId };
     }
     case 'pointer':
       // Leaving restarts the hold countdown.
       return { ...state, frozen: event.over, seenAt: event.over ? state.seenAt : event.now };
     case 'confirmed':
     case 'dismiss':
-      return { ...state, candidates: null, scan: null, live: false, frozen: false,
+      return { ...state, candidates: null, scan: null, live: false, frozen: false, confirmingId: null,
         suppressedIds: state.candidates ? [...state.suppressedIds, state.candidates[0].id] : state.suppressedIds };
-    case 'added':
-      return { ...state, suppressedIds: [...state.suppressedIds, event.cardId] };
+    case 'added': {
+      const suppressed = { ...state, suppressedIds: [...state.suppressedIds, event.cardId] };
+      // The scanner got the card the strip was showing: nothing left to pick.
+      const shown = state.confirmingId === event.cardId || state.candidates?.[0]?.id === event.cardId;
+      return shown ? { ...suppressed, candidates: null, scan: null, live: false, frozen: false, confirmingId: null } : suppressed;
+    }
     default:
       return state;
   }
@@ -60,8 +74,8 @@ export function choiceStripReducer(state, event) {
 
 export function choiceStripView(state, now) {
   const expired = !state.live && !state.frozen && now - state.seenAt > CHOICE_STRIP_HOLD_MS;
-  if (!state.candidates || expired) return { candidates: null, scan: null, remainingMs: null };
-  return { candidates: state.candidates, scan: state.scan,
+  if (!state.candidates || expired) return { candidates: null, scan: null, remainingMs: null, confirmingId: null };
+  return { candidates: state.candidates, scan: state.scan, confirmingId: state.live || state.frozen ? state.confirmingId : null,
     remainingMs: state.live || state.frozen ? null : Math.max(0, CHOICE_STRIP_HOLD_MS - (now - state.seenAt)) };
 }
 

@@ -153,8 +153,6 @@ test('the Choice strip shows the top 3 candidates and holds them 3 s after the c
   assert.equal(choiceStripView(state, 2500).remainingMs, CHOICE_STRIP_HOLD_MS - 1000);
   assert.equal(choiceStripView(state, 1500 + CHOICE_STRIP_HOLD_MS).candidates.length, 3);
   assert.equal(choiceStripView(state, 1501 + CHOICE_STRIP_HOLD_MS).candidates, null);
-  assert.equal(choiceStripView(strip(observe(weakScan({ matched: true }), 1000)), 1000).candidates, null,
-    'nothing to pick when the scanner accepts the frame');
 });
 
 test('the pointer freezes the Choice strip, and the hold restarts when it leaves', () => {
@@ -168,11 +166,31 @@ test('the pointer freezes the Choice strip, and the hold restarts when it leaves
   assert.equal(choiceStripView(state, 60001 + CHOICE_STRIP_HOLD_MS).candidates, null);
 });
 
-test('a frame the scanner accepts hides the Choice strip unless the pointer is over it', () => {
-  const accepted = weakScan({ matched: true });
-  assert.equal(choiceStripView(strip(observe(weakScan(), 1000), observe(accepted, 1100)), 1100).candidates, null);
-  const frozen = strip(observe(weakScan(), 1000), { type: 'pointer', over: true, now: 1050 }, observe(accepted, 1100));
-  assert.equal(choiceStripView(frozen, 1100).candidates.length, 3);
+test('while the scanner is locking on, the Choice strip stays up and marks the card it is confirming', () => {
+  const confirming = (cardData, patch = {}) => weakScan({ matched: true, cardData, ...patch });
+  let state = strip(observe(weakScan(), 1000), observe(confirming(top), 1100));
+  let view = choiceStripView(state, 1100);
+  assert.deepEqual(view.candidates.map((card) => card.id), [top.id, second.id, third.id]);
+  assert.equal(view.confirmingId, top.id);
+  state = choiceStripReducer(state, observe(weakScan(), 1200));
+  assert.equal(choiceStripView(state, 1200).confirmingId, null, 'an unclear frame drops the marker');
+
+  view = choiceStripView(strip(observe(confirming(third), 1000)), 1000);
+  assert.equal(view.confirmingId, third.id, 'text can confirm a lower-ranked candidate');
+  const outside = resolveCardData({ id: 'text-only', name: 'Text only', code: 'TXT-001/100', set: 'TXT', rarity: 'common' });
+  view = choiceStripView(strip(observe(confirming(outside, { similarity: .7 }), 1000)), 1000);
+  assert.deepEqual(view.candidates.map((card) => card.id), [outside.id, top.id, second.id], 'the confirming card is always shown');
+  assert.equal(view.candidates[0].similarity, .7);
+
+  const frozen = strip(observe(weakScan(), 1000), { type: 'pointer', over: true, now: 1050 }, observe(confirming(second), 1100));
+  view = choiceStripView(frozen, 1100);
+  assert.equal(view.candidates[0].id, top.id, 'tiles do not move under the pointer');
+  assert.equal(view.confirmingId, second.id);
+});
+
+test('a card the scanner is confirming is not offered again once it was picked or added', () => {
+  const state = strip({ type: 'added', cardId: top.id, now: 1000 }, observe(weakScan({ matched: true }), 1100));
+  assert.equal(choiceStripView(state, 1100).candidates, null);
 });
 
 test('after a confirm or dismiss the Choice strip is not offered for that card until it leaves the frame', () => {
@@ -222,4 +240,11 @@ test('picking candidate 2 keeps the Choice strip away for the same card while it
   const state = strip(observe(weakScan(), 1000), { type: 'confirmed', now: 1100 },
     { type: 'added', cardId: second.id, now: 1100 }, observe(weakScan(), 1200));
   assert.equal(choiceStripView(state, 1200).candidates, null);
+});
+
+test('the Choice strip closes as soon as the scanner adds the card it was confirming', () => {
+  const state = strip(observe(weakScan({ matched: true }), 1000), { type: 'added', cardId: top.id, now: 1100 });
+  assert.equal(choiceStripView(state, 1100).candidates, null);
+  const other = strip(observe(weakScan(), 1000), { type: 'added', cardId: 'something-else', now: 1100 });
+  assert.equal(choiceStripView(other, 1100).candidates.length, 3, 'an unrelated add leaves the strip alone');
 });

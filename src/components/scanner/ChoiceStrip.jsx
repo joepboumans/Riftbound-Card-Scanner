@@ -11,10 +11,13 @@ export function ChoiceKey({ children }) {
 }
 
 // One candidate tile, shared with Snap review.
-export function CandidateTile({ card, rank, onPick, className = '' }) {
+export function CandidateTile({ card, rank, onPick, confirming = false, className = '' }) {
+  const border = confirming ? 'border-emerald-400 ring-2 ring-emerald-400/60 animate-pulse'
+    : rank === 1 ? 'border-gold-400/70 bg-gold-500/10' : 'border-white/15';
   return (
     <button type="button" onClick={() => onPick(card, rank)} aria-label={`Use ${card.name} ${card.code || card.id}`}
-      className={`relative rounded-xl border p-2 text-left hover:border-gold-400 ${rank === 1 ? 'border-gold-400/70 bg-gold-500/10' : 'border-white/15'} ${className}`}>
+      className={`relative rounded-xl border p-2 text-left hover:border-gold-400 ${border} ${className}`}>
+      {confirming && <span className="absolute left-1 top-1 rounded bg-emerald-500/90 px-1 text-[10px] font-semibold text-black">Confirming</span>}
       <span className="absolute right-1 top-1"><ChoiceKey>{rank === 1 ? '1 / Enter' : rank}</ChoiceKey></span>
       <CardImage src={resolveCardImageSource(card.imageUrl, card.id)} alt={card.name} className="mx-auto h-32 rounded-md object-contain" />
       <span className="mt-1 block truncate text-xs font-semibold text-white">{card.name}</span>
@@ -33,9 +36,10 @@ export function SearchTile({ onSearch, className = '' }) {
   );
 }
 
-// The picker over the live camera view for a card the scanner shows but will
-// not accept. Shown only while `enabled` (auto scan on, never fake or debug).
-export default function ChoiceStrip({ enabled, detection, lastAddedCardId, lastAddedAt, onPick, onSearch, onVisibleChange }) {
+// The picker over the live camera view for a card the scanner has not
+// accepted. While the scanner is confirming a card it stays up and marks that
+// card. Shown only while `enabled` (auto scan on, never fake or debug).
+export default function ChoiceStrip({ enabled, detection, lastAddedCardId, lastAddedAt, onPick, onSearch }) {
   const [state, setState] = useState(CHOICE_STRIP_INITIAL);
   const [, setTick] = useState(0);
   const dispatch = (event) => setState((previous) => choiceStripReducer(previous, event));
@@ -54,7 +58,6 @@ export default function ChoiceStrip({ enabled, detection, lastAddedCardId, lastA
   }, [counting]);
 
   const visible = Boolean(view.candidates);
-  useEffect(() => { onVisibleChange?.(visible); }, [visible, onVisibleChange]);
 
   const pick = (card, rank) => { onPick(view.scan, card, rank); dispatch({ type: 'confirmed', now: Date.now() }); };
   const search = () => { onSearch(view.scan); dispatch({ type: 'dismiss', now: Date.now() }); };
@@ -67,10 +70,13 @@ export default function ChoiceStrip({ enabled, detection, lastAddedCardId, lastA
     <div role="dialog" aria-label="Which card is this?" onClick={(event) => event.stopPropagation()}
       onPointerEnter={() => dispatch({ type: 'pointer', over: true, now: Date.now() })}
       onPointerLeave={() => dispatch({ type: 'pointer', over: false, now: Date.now() })}
-      className="absolute bottom-16 left-1/2 z-40 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-2xl border border-amber-400/40 bg-black/80 p-3 text-white shadow-xl backdrop-blur-sm">
-      <div className="mb-2 text-center text-xs font-semibold text-amber-300">Which card is this?</div>
+      className={`absolute bottom-16 left-1/2 z-40 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-2xl border ${view.confirmingId ? 'border-emerald-400/50' : 'border-amber-400/40'} bg-black/80 p-3 text-white shadow-xl backdrop-blur-sm`}>
+      <div role="status" aria-live="polite" className={`mb-2 text-center text-xs font-semibold ${view.confirmingId ? 'text-emerald-300' : 'text-amber-300'}`}>
+        {view.confirmingId ? 'Locking on… hold steady, or pick the card yourself' : 'Which card is this?'}
+      </div>
       <div className="flex gap-2 overflow-x-auto">
-        {view.candidates.map((card, index) => <CandidateTile key={card.id} card={card} rank={index + 1} onPick={pick} className="w-28 shrink-0" />)}
+        {view.candidates.map((card, index) => <CandidateTile key={card.id} card={card} rank={index + 1} onPick={pick}
+          confirming={card.id === view.confirmingId} className="w-28 shrink-0" />)}
         <SearchTile onSearch={search} className="w-20 shrink-0" />
       </div>
       {counting && (
