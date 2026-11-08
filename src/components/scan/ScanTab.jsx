@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Camera, Upload, Loader2, RotateCcw, ScanLine, Download, Plus, CheckSquare, Square, Trash2, ChevronsRight, ChevronDown, Search } from 'lucide-react';
+import { Camera, Upload, Loader2, RotateCcw, ScanLine, Download, Plus, CheckSquare, Square, Trash2, ChevronsRight, ChevronDown, Search, Copy } from 'lucide-react';
 import ScannerCamera from '../scanner/ScannerCamera.jsx';
 import { DEFAULT_SCAN_MATCHING } from '../../lib/scanMatching.js';
 import CardCounter from '../scanner/CardCounter.jsx';
@@ -10,7 +10,7 @@ import { CardTextIndex } from '../../lib/cardTextIdentity.js';
 import { recognizeCard, buildRecognitionResult, applyTextVerification, matchFromRanking } from '../../lib/cardRecognition.js';
 import { getDetector } from '../../lib/yoloDetector.js';
 import { getMatcher } from '../../lib/cardMatcher.js';
-import { downloadCSV, validateForExport } from '../../lib/csvExporter.js';
+import { downloadCSV, copyDeckList, validateForExport, EXPORT_FORMATS } from '../../lib/csvExporter.js';
 import { formatPrice, getPriceValue as getRecordPriceValue } from '../../lib/priceFormat.js';
 import { isFoilOnly } from '../../data/sampleCards.js';
 import { fullNameOf, resolveCardData } from '../../lib/cardData.js';
@@ -646,9 +646,20 @@ export default function ScanTab({
     if (exportCards.length === 0) { showNotification('Select at least one card', 'error'); return; }
     const { valid, errors } = validateForExport(exportCards, exportFormat);
     if (!valid) { showNotification('Error: ' + errors[0], 'error'); return; }
-    downloadCSV(exportCards, null, exportFormat);
-    showNotification('CSV exported — ' + exportCards.length + ' card rows', 'success');
+    const result = downloadCSV(exportCards, null, exportFormat);
+    showNotification('Exported — ' + exportCards.length + ' card rows' + (result?.notice ? ' · ' + result.notice : ''), 'success');
   }, [checkedIndices, detections, showNotification, exportFormat]);
+
+  const copyCheckedDeckList = useCallback(async () => {
+    const exportCards = getSelectedDetectionEntries(detections, checkedIndices);
+    if (exportCards.length === 0) { showNotification('Select at least one card', 'error'); return; }
+    try {
+      await copyDeckList(exportCards);
+      showNotification('Deck list copied — ' + exportCards.length + ' card rows', 'success');
+    } catch {
+      showNotification('Could not copy the deck list', 'error');
+    }
+  }, [checkedIndices, detections, showNotification]);
 
   const handleDetectionEntryChange = useCallback((index, patch) => {
     setDetections((prev) => prev.map((det, i) => i === index
@@ -676,8 +687,14 @@ export default function ScanTab({
           </button>
           <button onClick={exportCheckedCSV} className="btn-secondary text-xs py-1.5 px-3 rounded-xl">
             <Download className="w-3.5 h-3.5" />
-            CSV
+            {exportFormat === EXPORT_FORMATS.DECK_LIST ? 'TXT' : 'CSV'}
           </button>
+          {exportFormat === EXPORT_FORMATS.DECK_LIST && (
+            <button onClick={copyCheckedDeckList} className="btn-secondary text-xs py-1.5 px-3 rounded-xl">
+              <Copy className="w-3.5 h-3.5" />
+              Copy
+            </button>
+          )}
         </>
       )}
     </div>

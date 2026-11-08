@@ -11,7 +11,7 @@
   },
   "type": "module",
   "scripts": {
-    "test": "node --test tests/collection.test.mjs tests/scanner.test.mjs tests/quality.test.mjs tests/database.test.mjs tests/prices.test.mjs tests/updater.test.mjs tests/release.test.mjs tests/sound.test.mjs tests/matching.test.mjs tests/perspective.test.mjs tests/text-verification.test.mjs tests/debug-scans.test.mjs tests/scan-recording.test.mjs tests/visual-verification.test.mjs tests/runes.test.mjs tests/user-confirmation.test.mjs tests/card-names.test.mjs tests/csv-export.test.mjs",
+    "test": "node --test tests/collection.test.mjs tests/scanner.test.mjs tests/quality.test.mjs tests/database.test.mjs tests/prices.test.mjs tests/updater.test.mjs tests/release.test.mjs tests/sound.test.mjs tests/matching.test.mjs tests/perspective.test.mjs tests/text-verification.test.mjs tests/debug-scans.test.mjs tests/scan-recording.test.mjs tests/visual-verification.test.mjs tests/runes.test.mjs tests/user-confirmation.test.mjs tests/card-names.test.mjs tests/csv-export.test.mjs tests/riftbound-exports.test.mjs",
     "test:release": "node --test tests/release.test.mjs",
     "test:cards": "node --test tests/card-assets.test.mjs",
     "check:assets": "node scripts/check-runtime-assets.mjs",

@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Download, Trash2, Layers, Search, X, ChevronDown } from 'lucide-react';
+import { Download, Copy, Trash2, Layers, Search, X, ChevronDown } from 'lucide-react';
 import ScannerCardRow from '../scanner/ScannerCardRow.jsx';
 import { fullNameOf } from '../../lib/cardData.js';
+import { EXPORT_FORMATS } from '../../lib/csvExporter.js';
 import { getPriceValue as getRecordPriceValue } from '../../lib/priceFormat.js';
 
 const COLLECTION_SORT_OPTIONS = [
@@ -20,6 +21,8 @@ export default function CollectionTab({
   onSplitCard,
   onClearAll,
   onExport,
+  exportFormat,
+  onCopyDeckList,
   priceByCardId,
   priceCurrency = 'EUR',
   priceExchangeRates,
@@ -161,8 +164,18 @@ export default function CollectionTab({
             className="btn-primary text-xs py-2 px-4 rounded-xl"
           >
             <Download className="w-4 h-4" />
-            CSV
+            {exportFormat === EXPORT_FORMATS.DECK_LIST ? 'TXT' : 'CSV'}
           </button>
+          {exportFormat === EXPORT_FORMATS.DECK_LIST && (
+            <button
+              onClick={onCopyDeckList}
+              disabled={scannedCards.length === 0}
+              className="btn-secondary text-xs py-2 px-4 rounded-xl"
+            >
+              <Copy className="w-4 h-4" />
+              Copy
+            </button>
+          )}
           <button
             onClick={onClearAll}
             disabled={scannedCards.length === 0}
