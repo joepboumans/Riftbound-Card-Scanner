@@ -4,9 +4,9 @@ use image::{imageops::{self, FilterType}, DynamicImage, RgbImage};
 use directories::ProjectDirs;
 use regex::Regex;
 use reqwest::blocking::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashSet, fs, path::Path, time::Duration};
+use std::{collections::{HashMap, HashSet}, fs, path::Path, time::Duration};
 use tauri::{Emitter, Manager};
 use url::Url;
 #[cfg(any(debug_assertions, test))]
@@ -15,6 +15,7 @@ mod debug_recording;
 mod diagnostic_exports;
 
 const GALLERY_URL: &str = "https://playriftbound.com/en-us/card-gallery/";
+const LIST_API_HOST: &str = "https://content.publishing.riotgames.com";
 const GRID_SIZE: usize = 16;
 const ART_TOP: f32 = 0.05;
 const ART_BOTTOM: f32 = 0.55;
@@ -95,6 +96,7 @@ struct CardHashesDatabase {
 struct CardHashRecord {
   id: String,
   name: String,
+  subtitle: String,
   number: String,
   code: String,
   set: String,
@@ -111,9 +113,30 @@ struct CardHashRecord {
   illustrator: String,
   text: String,
   orientation: String,
-  #[serde(rename = "imageUrl")]
-  image_url: String,
-  f: Vec<f32>,
+  /// The local cached image. Absent on a metadata-only refresh, which keeps the local one.
+  #[serde(rename = "imageUrl", skip_serializing_if = "Option::is_none")]
+  image_url: Option<String>,
+  /// The gallery image the features were (or will stay) computed from.
+  #[serde(rename = "sourceImageUrl")]
+  source_image_url: String,
+  /// Artwork features. Absent on a metadata-only refresh, which keeps the local ones.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  f: Option<Vec<f32>>,
+}
+
+/// A card the local card database already has, with the gallery image it was hashed from
+/// (empty when unknown).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KnownCard {
+  id: String,
+  #[serde(default)]
+  source_image_url: String,
+}
+
+struct GalleryUpdate {
+  cards: Vec<CardHashRecord>,
+  skipped: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -174,11 +197,7 @@ async fn fetch_exchange_rates() -> Result<ExchangeRateInfo, String> {
 }
 
 fn fetch_exchange_rates_blocking() -> Result<ExchangeRateInfo, String> {
-  let client = Client::builder()
-    .timeout(Duration::from_secs(30))
-    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    .build()
-    .map_err(|error| format!("Failed to initialize HTTP client: {}", error))?;
+  let client = http_client()?;
 
   let response = client
     .get("https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml")
@@ -243,16 +262,19 @@ fn fetch_exchange_rates_blocking() -> Result<ExchangeRateInfo, String> {
 #[tauri::command]
 async fn update_card_database(
   app: tauri::AppHandle,
-  existing_card_ids: Vec<String>,
+  known_cards: Vec<KnownCard>,
+  grid_size: usize,
 ) -> Result<String, String> {
-  tauri::async_runtime::spawn_blocking(move || update_card_database_blocking(app, existing_card_ids))
+  // Features from another grid cannot be kept, so every card is then re-hashed.
+  let known_cards = if grid_size == GRID_SIZE { known_cards } else { Vec::new() };
+  tauri::async_runtime::spawn_blocking(move || update_card_database_blocking(app, known_cards))
     .await
     .map_err(|error| format!("Card database update worker failed: {}", error))?
 }
 
 fn update_card_database_blocking(
   app: tauri::AppHandle,
-  existing_card_ids: Vec<String>,
+  known_cards: Vec<KnownCard>,
 ) -> Result<String, String> {
   emit_card_database_progress(
     &app,
@@ -263,11 +285,7 @@ fn update_card_database_blocking(
     0.02,
   );
 
-  let client = Client::builder()
-    .timeout(Duration::from_secs(30))
-    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    .build()
-    .map_err(|error| format!("Failed to initialize HTTP client: {}", error))?;
+  let client = http_client()?;
 
   let project_dirs = ProjectDirs::from("com", "Teme1999", "RiftboundScanner")
     .ok_or_else(|| "Failed to resolve the application data directory.".to_string())?;
@@ -284,68 +302,42 @@ fn update_card_database_blocking(
     0.04,
   );
 
-  let html = client
-    .get(GALLERY_URL)
-    .send()
-    .and_then(|response| response.error_for_status())
-    .and_then(|response| response.text())
-    .map_err(|error| format!("Failed to download Riot card gallery: {}", error))?;
-
-  let next_data = extract_next_data(&html)?;
-  let raw_cards = extract_cards(&next_data)?;
+  let raw_cards = fetch_gallery_cards(&client)?;
 
   if raw_cards.is_empty() {
     return Err("No cards were found in the Riot gallery data.".to_string());
   }
 
-  let existing_ids = existing_card_ids.into_iter()
-    .map(|id| id.trim().to_string())
-    .filter(|id| !id.is_empty())
-    .collect::<HashSet<_>>();
-  let total_gallery_cards = raw_cards.len();
-  let raw_cards = missing_gallery_cards(raw_cards, &existing_ids);
+  let known = known_cards.into_iter()
+    .map(|card| (card.id.trim().to_string(), card.source_image_url.trim().to_string()))
+    .filter(|(id, _)| !id.is_empty())
+    .collect::<HashMap<_, _>>();
   let total_cards = raw_cards.len();
   emit_card_database_progress(
     &app,
     "cards",
-    if total_cards == 0 {
-      format!(
-        "All {} gallery cards are already covered by the local database.",
-        total_gallery_cards
-      )
-    } else {
-      format!(
-        "Found {} gallery cards. Downloading {} missing cards, including additions to existing sets...",
-        total_gallery_cards,
-        total_cards
-      )
-    },
+    format!("Found {} gallery cards. Refreshing card details and downloading new or changed images...", total_cards),
     0,
     total_cards,
-    if total_cards == 0 { 0.90 } else { 0.12 },
+    0.12,
   );
 
-  let mut cards = Vec::new();
-  let mut skipped = 0usize;
-
-  for (index, raw_card) in raw_cards.into_iter().enumerate() {
-    match normalize_card(&raw_card, &client, &cards_cache_dir) {
-      Ok(Some(card)) => cards.push(card),
-      Ok(None) => skipped += 1,
-      Err(_) => skipped += 1,
-    }
-
-    let completed = index + 1;
-    let percent = 0.12 + (completed as f32 / total_cards as f32) * 0.78;
-    emit_card_database_progress(
-      &app,
-      "cards",
-      format!("Processed {}/{} cards ({} skipped)...", completed, total_cards, skipped),
-      completed,
-      total_cards,
-      percent,
-    );
-  }
+  let GalleryUpdate { mut cards, skipped } = gallery_update(
+    raw_cards,
+    &known,
+    &mut |raw, url| hash_gallery_image(raw, url, &client, &cards_cache_dir).ok().flatten(),
+    &mut |completed, total, skipped| {
+      let percent = 0.12 + (completed as f32 / total.max(1) as f32) * 0.78;
+      emit_card_database_progress(
+        &app,
+        "cards",
+        format!("Processed {}/{} cards ({} skipped)...", completed, total, skipped),
+        completed,
+        total,
+        percent,
+      );
+    },
+  );
 
   cards.sort_by(|left, right| {
     left.set
@@ -384,6 +376,54 @@ fn update_card_database_blocking(
   Ok(payload)
 }
 
+fn http_client() -> Result<Client, String> {
+  Client::builder()
+    .timeout(Duration::from_secs(30))
+    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    .build()
+    .map_err(|error| format!("Failed to initialize HTTP client: {}", error))
+}
+
+fn fetch_gallery_cards(client: &Client) -> Result<Vec<Value>, String> {
+  let html = client
+    .get(GALLERY_URL)
+    .send()
+    .and_then(|response| response.error_for_status())
+    .and_then(|response| response.text())
+    .map_err(|error| format!("Failed to download Riot card gallery: {}", error))?;
+
+  let next_data = extract_next_data(&html)?;
+  extract_cards(&next_data, &mut |link| fetch_list_page(client, link))
+}
+
+/// New-print check: fetches the gallery and returns the ids missing from the local
+/// card database. Downloads no images and changes nothing.
+#[tauri::command]
+async fn check_new_prints(known_ids: Vec<String>) -> Result<Vec<String>, String> {
+  tauri::async_runtime::spawn_blocking(move || {
+    let local = known_ids.into_iter().map(|id| id.trim().to_string()).collect::<HashSet<_>>();
+    let raw_cards = fetch_gallery_cards(&http_client()?)?;
+    Ok(new_gallery_ids(&raw_cards, &local))
+  })
+  .await
+  .map_err(|error| format!("New-print check worker failed: {}", error))?
+}
+
+/// Gallery ids (in gallery order, once each) that the local card database lacks.
+fn new_gallery_ids(raw_cards: &[Value], local: &HashSet<String>) -> Vec<String> {
+  let mut seen = HashSet::new();
+  raw_cards
+    .iter()
+    .map(card_id)
+    .filter(|id| !id.is_empty() && !local.contains(id) && seen.insert(id.clone()))
+    .collect()
+}
+
+/// A gallery card's id, trimmed. Empty when missing.
+fn card_id(raw: &Value) -> String {
+  value_to_string(raw.get("id")).trim().to_string()
+}
+
 fn extract_next_data(html: &str) -> Result<Value, String> {
   let regex = Regex::new(r#"(?s)<script id="__NEXT_DATA__"[^>]*>(.*?)</script>"#)
     .map_err(|error| format!("Failed to build gallery parser: {}", error))?;
@@ -400,31 +440,126 @@ fn extract_next_data(html: &str) -> Result<Value, String> {
   serde_json::from_str(json_text).map_err(|error| format!("Failed to parse Riot gallery JSON: {}", error))
 }
 
-fn missing_gallery_cards(raw_cards: Vec<Value>, existing_ids: &HashSet<String>) -> Vec<Value> {
-  let mut seen_ids = HashSet::new();
-  raw_cards.into_iter().filter(|raw| {
-    let id = value_to_string(raw.get("id")).trim().to_string();
-    !id.is_empty() && !existing_ids.contains(&id) && seen_ids.insert(id)
-  }).collect()
+fn gallery_image_url(raw: &Value) -> String {
+  raw
+    .get("cardImage")
+    .and_then(|value| value.get("url"))
+    .and_then(Value::as_str)
+    .unwrap_or("")
+    .trim()
+    .to_string()
 }
 
-fn extract_cards(next_data: &Value) -> Result<Vec<Value>, String> {
-  if let Some(blades) = next_data
-    .pointer("/props/pageProps/blades")
-    .and_then(Value::as_array)
-  {
-    for blade in blades {
-      if let Some(cards) = blade.get("cards") {
-        if let Some(items) = cards.get("items").and_then(Value::as_array) {
-          return Ok(items.clone());
-        }
+/// Records for every gallery card. A known card whose image is unchanged (or whose source
+/// image is unknown) gets a metadata-only record; a new card or a changed image is
+/// downloaded and re-hashed through `hash_image`. When a known card's re-download fails it
+/// still gets a metadata-only record that keeps its old source image, so its features and
+/// image path stay and the next update retries the download; a new card whose download
+/// fails gets no record. Cards missing from the gallery are not touched.
+fn gallery_update(
+  raw_cards: Vec<Value>,
+  known: &HashMap<String, String>,
+  hash_image: &mut dyn FnMut(&Value, &str) -> Option<(String, Vec<f32>)>,
+  progress: &mut dyn FnMut(usize, usize, usize),
+) -> GalleryUpdate {
+  let mut seen_ids = HashSet::new();
+  let raw_cards = raw_cards.into_iter().filter(|raw| {
+    let id = card_id(raw);
+    !id.is_empty() && seen_ids.insert(id)
+  }).collect::<Vec<_>>();
+  let total = raw_cards.len();
+  let mut cards = Vec::new();
+  let mut skipped = 0usize;
 
-        if let Some(values) = cards.as_array() {
-          if !values.is_empty() {
-            return Ok(values.clone());
+  for (index, raw) in raw_cards.iter().enumerate() {
+    let id = card_id(raw);
+    let url = gallery_image_url(raw);
+    let known_source = known.get(&id);
+    let needs_hash = !url.is_empty() && known_source.map_or(true, |source| !source.is_empty() && *source != url);
+    if needs_hash {
+      match hash_image(raw, &url) {
+        Some((image_path, features)) => cards.push(card_record(raw, image_path, features)),
+        None => {
+          skipped += 1;
+          if let Some(source) = known_source {
+            cards.push(CardHashRecord { source_image_url: source.clone(), ..metadata_record(raw) });
           }
         }
       }
+    } else if known.contains_key(&id) {
+      cards.push(metadata_record(raw));
+    } else {
+      skipped += 1;
+    }
+    progress(index + 1, total, skipped);
+  }
+
+  GalleryUpdate { cards, skipped }
+}
+
+fn fetch_list_page(client: &Client, link: &str) -> Result<Value, String> {
+  let url = if link.starts_with("http") { link.to_string() } else { format!("{}{}", LIST_API_HOST, link) };
+  client
+    .get(&url)
+    .send()
+    .and_then(|response| response.error_for_status())
+    .and_then(|response| response.json::<Value>())
+    .map_err(|error| format!("Failed to download a Riot card gallery page: {}", error))
+}
+
+fn gallery_blade(next_data: &Value) -> Option<&Value> {
+  next_data
+    .pointer("/props/pageProps/page/blades")
+    .and_then(Value::as_array)?
+    .iter()
+    .find(|blade| blade.get("type").and_then(Value::as_str) == Some("riftboundCardGallery"))
+}
+
+/// The list API's next-page link, from a blade's `cards` or an API page.
+fn next_link(page: &Value) -> Option<String> {
+  [page.pointer("/async/linkdata/next"), page.pointer("/linkdata/next")]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .find(|link| !link.is_empty())
+    .map(str::to_string)
+}
+
+/// Collects the first page's items and, unless the page says everything was
+/// prefetched, every further page of the list API. The card count is never
+/// compared with `totalItems` (the API over-counts).
+fn follow_pages(
+  cards: &Value,
+  items: &[Value],
+  fetch_page: &mut dyn FnMut(&str) -> Result<Value, String>,
+) -> Result<Vec<Value>, String> {
+  let mut all = items.to_vec();
+  if cards.pointer("/async/metadata/prefetchAll").and_then(Value::as_bool) == Some(true) {
+    return Ok(all);
+  }
+  let mut seen_links = HashSet::new();
+  let mut link = next_link(cards);
+  while let Some(current) = link {
+    if !seen_links.insert(current.clone()) {
+      break;
+    }
+    let page = fetch_page(&current)?;
+    if let Some(page_items) = page.get("items").and_then(Value::as_array) {
+      all.extend(page_items.iter().cloned());
+    }
+    link = next_link(&page);
+  }
+  let mut seen_ids = HashSet::new();
+  Ok(all.into_iter().filter(|item| seen_ids.insert(card_id(item))).collect())
+}
+
+fn extract_cards(
+  next_data: &Value,
+  fetch_page: &mut dyn FnMut(&str) -> Result<Value, String>,
+) -> Result<Vec<Value>, String> {
+  if let Some(cards) = gallery_blade(next_data).and_then(|blade| blade.get("cards")) {
+    if let Some(items) = cards.get("items").and_then(Value::as_array) {
+      return follow_pages(cards, items, fetch_page);
     }
   }
 
@@ -535,19 +670,50 @@ fn round_feature(value: f32) -> f32 {
   (value * 10_000.0).round() / 10_000.0
 }
 
-fn normalize_card(raw: &Value, client: &Client, cards_cache_dir: &Path) -> Result<Option<CardHashRecord>, String> {
-  let card_image_url = raw
-    .get("cardImage")
-    .and_then(|value| value.get("url"))
-    .and_then(Value::as_str)
-    .unwrap_or("")
-    .trim()
-    .to_string();
+/// Downloads a gallery card image, caches it and returns the cached path and artwork features.
+fn hash_gallery_image(
+  raw: &Value,
+  card_image_url: &str,
+  client: &Client,
+  cards_cache_dir: &Path,
+) -> Result<Option<(String, Vec<f32>)>, String> {
+  let raw_image = match client
+    .get(normalize_image_url(card_image_url))
+    .send()
+    .and_then(|response| response.error_for_status())
+    .and_then(|response| response.bytes())
+  {
+    Ok(bytes) => bytes,
+    Err(_) => return Ok(None),
+  };
 
-  if card_image_url.is_empty() {
-    return Ok(None);
+  let mut image = match image::load_from_memory(&raw_image) {
+    Ok(image) => image,
+    Err(_) => return Ok(None),
+  };
+
+  if image.width() > image.height() {
+    let rotated = imageops::rotate90(&image.to_rgba8());
+    image = DynamicImage::ImageRgba8(rotated);
   }
 
+  let image_path = cards_cache_dir.join(format!("{}.webp", card_id(raw)));
+  image
+    .save_with_format(&image_path, image::ImageFormat::WebP)
+    .map_err(|error| format!("Failed to save cached card image {}: {}", image_path.display(), error))?;
+
+  let features = compute_color_grid(&image);
+  Ok(Some((image_path.to_string_lossy().to_string(), features)))
+}
+
+/// The card record for one gallery card, given its cached image and artwork features.
+fn card_record(raw: &Value, image_url: String, features: Vec<f32>) -> CardHashRecord {
+  CardHashRecord { image_url: Some(image_url), f: Some(features), ..metadata_record(raw) }
+}
+
+/// The card record for one gallery card without image path and features, for a card whose
+/// local image and features stay as they are.
+fn metadata_record(raw: &Value) -> CardHashRecord {
   let domains = raw
     .get("domain")
     .and_then(|value| value.get("values"))
@@ -650,36 +816,10 @@ fn normalize_card(raw: &Value, client: &Client, cards_cache_dir: &Path) -> Resul
     .unwrap_or("portrait")
     .to_string();
 
-  let raw_image = match client
-    .get(normalize_image_url(&card_image_url))
-    .send()
-    .and_then(|response| response.error_for_status())
-    .and_then(|response| response.bytes())
-  {
-    Ok(bytes) => bytes,
-    Err(_) => return Ok(None),
-  };
-
-  let mut image = match image::load_from_memory(&raw_image) {
-    Ok(image) => image,
-    Err(_) => return Ok(None),
-  };
-
-  if image.width() > image.height() {
-    let rotated = imageops::rotate90(&image.to_rgba8());
-    image = DynamicImage::ImageRgba8(rotated);
-  }
-
-  let image_path = cards_cache_dir.join(format!("{}.webp", raw.get("id").map(|value| value_to_string(Some(value))).unwrap_or_default()));
-  image
-    .save_with_format(&image_path, image::ImageFormat::WebP)
-    .map_err(|error| format!("Failed to save cached card image {}: {}", image_path.display(), error))?;
-
-  let features = compute_color_grid(&image);
-
-  Ok(Some(CardHashRecord {
-    id: raw.get("id").map(|value| value_to_string(Some(value))).unwrap_or_default(),
+  CardHashRecord {
+    id: card_id(raw),
     name: raw.get("name").map(|value| value_to_string(Some(value))).unwrap_or_default(),
+    subtitle: raw.get("subtitle").and_then(Value::as_str).unwrap_or("").to_string(),
     number: raw
       .get("collectorNumber")
       .map(|value| value_to_string(Some(value)))
@@ -700,9 +840,10 @@ fn normalize_card(raw: &Value, client: &Client, cards_cache_dir: &Path) -> Resul
     illustrator,
     text,
     orientation,
-    image_url: image_path.to_string_lossy().to_string(),
-    f: features,
-  }))
+    image_url: None,
+    source_image_url: gallery_image_url(raw),
+    f: None,
+  }
 }
 
 fn normalize_image_url(url: &str) -> String {
@@ -740,11 +881,11 @@ fn main() {
     .plugin(tauri_plugin_updater::Builder::new().build());
   #[cfg(debug_assertions)]
   let app = app.manage(debug_recording::RecordingState::default())
-    .invoke_handler(tauri::generate_handler![runtime_info, update_card_database, fetch_exchange_rates, open_external_url, open_storage_folder,
+    .invoke_handler(tauri::generate_handler![runtime_info, update_card_database, check_new_prints, fetch_exchange_rates, open_external_url, open_storage_folder,
       diagnostic_exports::save_native_frame, diagnostic_exports::save_debug_scan,
       debug_recording::start_debug_recording, debug_recording::append_debug_recording, debug_recording::record_debug_events, debug_recording::finish_debug_recording]);
   #[cfg(not(debug_assertions))]
-  let app = app.invoke_handler(tauri::generate_handler![runtime_info, update_card_database, fetch_exchange_rates, open_external_url, open_storage_folder]);
+  let app = app.invoke_handler(tauri::generate_handler![runtime_info, update_card_database, check_new_prints, fetch_exchange_rates, open_external_url, open_storage_folder]);
   app.run(tauri::generate_context!())
     .expect("error while running tauri application");
 }
@@ -755,31 +896,235 @@ mod tests {
   use serde_json::json;
 
   fn gallery_card(id: &str) -> Value {
-    json!({"id": id, "set": {"value": {"id": "RAD"}}})
+    gallery_card_with(id, &format!("https://cdn.example/{}.png", id), "Text")
+  }
+
+  fn gallery_card_with(id: &str, image_url: &str, text: &str) -> Value {
+    json!({
+      "id": id,
+      "set": {"value": {"id": "RAD"}},
+      "cardImage": {"url": image_url},
+      "text": {"richText": {"body": text}},
+    })
+  }
+
+  fn known(cards: &[(&str, &str)]) -> HashMap<String, String> {
+    cards.iter().map(|(id, url)| (id.to_string(), url.to_string())).collect()
+  }
+
+  /// Runs the update with a fake image download; returns the serialized
+  /// records, the skipped count and the image URLs that were downloaded.
+  fn run_update(
+    gallery: Vec<Value>,
+    known: &HashMap<String, String>,
+    failing_urls: &[&str],
+  ) -> (Vec<Value>, usize, Vec<String>) {
+    let mut downloaded = Vec::new();
+    let update = gallery_update(gallery, known, &mut |raw, url| {
+      downloaded.push(url.to_string());
+      if failing_urls.contains(&url) {
+        return None;
+      }
+      Some((format!("C:/cards/{}.webp", card_id(raw)), vec![0.5]))
+    }, &mut |_, _, _| {});
+    let cards = update.cards.into_iter().map(|card| serde_json::to_value(card).unwrap()).collect();
+    (cards, update.skipped, downloaded)
   }
 
   #[test]
   fn downloads_later_reveals_from_an_existing_set() {
-    let known = HashSet::from([String::from("rad-001")]);
-    let missing = missing_gallery_cards(vec![gallery_card("rad-001"), gallery_card("rad-002")], &known);
-    assert_eq!(missing.len(), 1);
-    assert_eq!(missing[0]["id"], "rad-002");
+    let (cards, _, downloaded) = run_update(
+      vec![gallery_card("rad-001"), gallery_card("rad-002")],
+      &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
+      &[],
+    );
+    assert_eq!(downloaded, vec!["https://cdn.example/rad-002.png"]);
+    let rad_002 = cards.iter().find(|card| card["id"] == "rad-002").unwrap();
+    assert_eq!(rad_002["imageUrl"], "C:/cards/rad-002.webp");
+    assert_eq!(rad_002["sourceImageUrl"], "https://cdn.example/rad-002.png");
+    assert_eq!(rad_002["f"], json!([0.5]));
+  }
+
+  #[test]
+  fn existing_card_with_changed_text_gets_new_metadata_without_a_download() {
+    let (cards, skipped, downloaded) = run_update(
+      vec![gallery_card_with("rad-001", "https://cdn.example/rad-001.png", "New text")],
+      &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
+      &[],
+    );
+    assert!(downloaded.is_empty());
+    assert_eq!(skipped, 0);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0]["text"], "New text");
+    assert_eq!(cards[0]["sourceImageUrl"], "https://cdn.example/rad-001.png");
+    assert!(cards[0].get("f").is_none(), "features must stay the local ones");
+    assert!(cards[0].get("imageUrl").is_none(), "image path must stay the local one");
+  }
+
+  #[test]
+  fn changed_image_url_triggers_a_rehash() {
+    let (cards, _, downloaded) = run_update(
+      vec![gallery_card_with("rad-001", "https://cdn.example/rad-001-v2.png", "Text")],
+      &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
+      &[],
+    );
+    assert_eq!(downloaded, vec!["https://cdn.example/rad-001-v2.png"]);
+    assert_eq!(cards[0]["f"], json!([0.5]));
+    assert_eq!(cards[0]["sourceImageUrl"], "https://cdn.example/rad-001-v2.png");
+  }
+
+  #[test]
+  fn failed_redownload_still_refreshes_metadata_and_keeps_the_old_image() {
+    let (cards, skipped, _) = run_update(
+      vec![gallery_card_with("rad-001", "https://cdn.example/rad-001-v2.png", "New text")],
+      &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
+      &["https://cdn.example/rad-001-v2.png"],
+    );
+    assert_eq!(skipped, 1);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0]["text"], "New text");
+    assert!(cards[0].get("f").is_none(), "features must stay the local ones");
+    assert!(cards[0].get("imageUrl").is_none(), "image path must stay the local one");
+    assert_eq!(
+      cards[0]["sourceImageUrl"], "https://cdn.example/rad-001.png",
+      "the old source image stays so the next update retries the download"
+    );
+  }
+
+  #[test]
+  fn a_card_without_a_known_source_image_is_refreshed_without_a_download() {
+    let (cards, _, downloaded) = run_update(vec![gallery_card("rad-001")], &known(&[("rad-001", "")]), &[]);
+    assert!(downloaded.is_empty());
+    assert_eq!(cards[0]["sourceImageUrl"], "https://cdn.example/rad-001.png");
+    assert!(cards[0].get("f").is_none());
   }
 
   #[test]
   fn retries_cards_that_failed_in_an_earlier_update() {
-    let gallery = vec![gallery_card("rad-001"), gallery_card("rad-002"), gallery_card("rad-003")];
-    let known = HashSet::from([String::from("rad-001"), String::from("rad-003")]);
-    let retry = missing_gallery_cards(gallery.clone(), &known);
-    assert_eq!(retry, vec![gallery_card("rad-002")]);
-    let complete = HashSet::from([String::from("rad-001"), String::from("rad-002"), String::from("rad-003")]);
-    assert!(missing_gallery_cards(gallery, &complete).is_empty());
+    let (cards, skipped, downloaded) = run_update(
+      vec![gallery_card("rad-001"), gallery_card("rad-002")],
+      &known(&[("rad-001", "https://cdn.example/rad-001.png")]),
+      &["https://cdn.example/rad-002.png"],
+    );
+    assert_eq!(downloaded, vec!["https://cdn.example/rad-002.png"]);
+    assert_eq!(skipped, 1);
+    assert_eq!(cards.iter().map(|card| card["id"].clone()).collect::<Vec<_>>(), vec![json!("rad-001")]);
   }
 
   #[test]
   fn ignores_empty_ids_and_duplicate_gallery_rows() {
-    let missing = missing_gallery_cards(vec![json!({}), gallery_card(""), gallery_card("rad-001"), gallery_card("rad-001")], &HashSet::new());
-    assert_eq!(missing, vec![gallery_card("rad-001")]);
+    let (cards, _, downloaded) = run_update(
+      vec![json!({}), gallery_card(""), gallery_card("rad-001"), gallery_card("rad-001")],
+      &HashMap::new(),
+      &[],
+    );
+    assert_eq!(downloaded, vec!["https://cdn.example/rad-001.png"]);
+    assert_eq!(cards.len(), 1);
+  }
+
+  #[test]
+  fn a_new_card_without_an_image_is_skipped() {
+    let (cards, skipped, downloaded) = run_update(vec![json!({"id": "rad-001"})], &HashMap::new(), &[]);
+    assert!(cards.is_empty() && downloaded.is_empty());
+    assert_eq!(skipped, 1);
+  }
+
+  const GALLERY_SAMPLE: &str = include_str!("../../tests/fixtures/card-gallery-next-data.json");
+  const GALLERY_EXPECTED: &str = include_str!("../../tests/fixtures/card-gallery-expected.json");
+
+  fn gallery_sample() -> Value {
+    serde_json::from_str(GALLERY_SAMPLE).unwrap()
+  }
+
+  fn expected_summary() -> Value {
+    serde_json::from_str(GALLERY_EXPECTED).unwrap()
+  }
+
+  fn no_fetch(url: &str) -> Result<Value, String> {
+    panic!("unexpected list API request: {}", url)
+  }
+
+  fn parsed_summary(next_data: &Value, fetch_page: &mut dyn FnMut(&str) -> Result<Value, String>) -> Value {
+    let cards = extract_cards(next_data, fetch_page).unwrap();
+    Value::Array(cards.iter().map(|raw| {
+      let record = card_record(raw, String::new(), Vec::new());
+      json!({"id": record.id, "code": record.code, "subtitle": record.subtitle})
+    }).collect())
+  }
+
+  #[test]
+  fn new_gallery_ids_are_the_sample_ids_missing_from_the_local_card_database() {
+    let raw_cards = extract_cards(&gallery_sample(), &mut no_fetch).unwrap();
+    let local = ["ogn-247-298", "unl-t04", "ogn-126-298", "retired-card"]
+      .into_iter().map(str::to_string).collect::<HashSet<_>>();
+    assert_eq!(new_gallery_ids(&raw_cards, &local), vec!["ogn-299-star-298", "rad-sp4-005"]);
+  }
+
+  #[test]
+  fn new_gallery_ids_ignore_blank_and_repeated_ids() {
+    let raw_cards = vec![json!({"id": " rad-001 "}), json!({"id": "rad-001"}), json!({"id": ""}), json!({})];
+    assert_eq!(new_gallery_ids(&raw_cards, &HashSet::new()), vec!["rad-001"]);
+  }
+
+  #[test]
+  fn sample_gallery_parses_to_the_expected_ids_codes_and_subtitles() {
+    assert_eq!(parsed_summary(&gallery_sample(), &mut no_fetch), expected_summary());
+  }
+
+  #[test]
+  fn old_page_props_blades_shape_still_parses_through_the_fallback() {
+    let mut sample = gallery_sample();
+    let mut blades = sample["props"]["pageProps"]["page"]["blades"].take();
+    sample["props"]["pageProps"].as_object_mut().unwrap().remove("page");
+    blades[2]["type"] = json!("renamedGalleryBlade");
+    let mut extra = blades[2]["cards"]["items"][2].clone();
+    extra["id"] = json!("rad-sp4-005-copy");
+    extra["publicCode"] = json!("RAD-SP4/005b");
+    blades[2]["cards"]["items"].as_array_mut().unwrap().push(extra);
+    sample["props"]["pageProps"]["blades"] = blades;
+    let mut expected = expected_summary();
+    expected.as_array_mut().unwrap().push(json!({"id": "rad-sp4-005-copy", "code": "RAD-SP4/005b", "subtitle": "Rebel"}));
+    assert_eq!(parsed_summary(&sample, &mut no_fetch), expected);
+  }
+
+  #[test]
+  fn paging_is_followed_when_the_page_was_not_fully_prefetched() {
+    let mut sample = gallery_sample();
+    let cards = &mut sample["props"]["pageProps"]["page"]["blades"][2]["cards"];
+    let items = cards["items"].as_array().unwrap().clone();
+    cards["items"] = json!(items[..2]);
+    cards["async"]["metadata"]["prefetchAll"] = json!(false);
+    cards["async"]["metadata"]["totalItems"] = json!(9999);
+    cards["async"]["linkdata"]["next"] = json!("/list?from=2");
+    let mut requested = Vec::new();
+    let mut fetch_page = |url: &str| -> Result<Value, String> {
+      requested.push(url.to_string());
+      match url {
+        "/list?from=2" => Ok(json!({"items": items[2..4], "linkdata": {"next": "/list?from=4"}})),
+        "/list?from=4" => Ok(json!({"items": items[3..], "linkdata": {"next": null}})),
+        other => Err(format!("unknown page {}", other)),
+      }
+    };
+    assert_eq!(parsed_summary(&sample, &mut fetch_page), expected_summary());
+    assert_eq!(requested, vec!["/list?from=2", "/list?from=4"]);
+  }
+
+  #[test]
+  fn a_fully_prefetched_page_never_calls_the_list_api() {
+    let mut sample = gallery_sample();
+    sample["props"]["pageProps"]["page"]["blades"][2]["cards"]["async"]["metadata"]["totalItems"] = json!(9999);
+    assert_eq!(parsed_summary(&sample, &mut no_fetch), expected_summary());
+  }
+
+  #[test]
+  fn subtitle_reaches_the_serialized_card_record() {
+    let sample = gallery_sample();
+    let kaisa = &sample["props"]["pageProps"]["page"]["blades"][2]["cards"]["items"][2];
+    let record = serde_json::to_value(card_record(kaisa, "kaisa.webp".to_string(), vec![0.5])).unwrap();
+    assert_eq!(record["name"], "Kai'Sa");
+    assert_eq!(record["subtitle"], "Rebel");
+    assert_eq!(record["code"], "RAD-SP4/005");
+    assert_eq!(record["imageUrl"], "kaisa.webp");
   }
 
 }

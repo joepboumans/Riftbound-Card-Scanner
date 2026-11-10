@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Download, Trash2, Layers, Search, X, ChevronDown } from 'lucide-react';
+import { Download, Copy, Trash2, Layers, Search, X, ChevronDown } from 'lucide-react';
 import ScannerCardRow from '../scanner/ScannerCardRow.jsx';
+import { compareByFullName, fullNameOf } from '../../lib/cardData.js';
+import { EXPORT_FORMATS, exportFileType } from '../../lib/csvExporter.js';
 import { getPriceValue as getRecordPriceValue } from '../../lib/priceFormat.js';
 
 const COLLECTION_SORT_OPTIONS = [
@@ -19,6 +21,8 @@ export default function CollectionTab({
   onSplitCard,
   onClearAll,
   onExport,
+  exportFormat,
+  onCopyDeckList,
   priceByCardId,
   priceCurrency = 'EUR',
   priceExchangeRates,
@@ -32,9 +36,9 @@ export default function CollectionTab({
 
     const query = searchQuery.toLowerCase().trim();
     return scannedCards.filter(card => {
-      const name = card.cardData.name.toLowerCase();
-      const collectorNumber = card.cardData.collectorNumber.toLowerCase();
-      return name.includes(query) || collectorNumber.includes(query);
+      const { name, code, collectorNumber } = card.cardData;
+      return [fullNameOf(card.cardData), name, code, collectorNumber]
+        .some((field) => String(field || '').toLowerCase().includes(query));
     });
   }, [scannedCards, searchQuery]);
 
@@ -57,7 +61,7 @@ export default function CollectionTab({
       }
 
       if (sortBy === 'name') {
-        const nameDelta = left.cardData.name.localeCompare(right.cardData.name, undefined, { sensitivity: 'base' });
+        const nameDelta = compareByFullName(left.cardData, right.cardData);
         if (nameDelta !== 0) return nameDelta;
       }
 
@@ -76,7 +80,7 @@ export default function CollectionTab({
         if (amountDelta !== 0) return amountDelta;
       }
 
-      return left.cardData.name.localeCompare(right.cardData.name, undefined, { sensitivity: 'base' });
+      return compareByFullName(left.cardData, right.cardData);
     });
   }, [filteredCards, sortBy, priceByCardId]);
 
@@ -160,8 +164,18 @@ export default function CollectionTab({
             className="btn-primary text-xs py-2 px-4 rounded-xl"
           >
             <Download className="w-4 h-4" />
-            CSV
+            {exportFileType(exportFormat)}
           </button>
+          {exportFormat === EXPORT_FORMATS.DECK_LIST && (
+            <button
+              onClick={onCopyDeckList}
+              disabled={scannedCards.length === 0}
+              className="btn-secondary text-xs py-2 px-4 rounded-xl"
+            >
+              <Copy className="w-4 h-4" />
+              Copy
+            </button>
+          )}
           <button
             onClick={onClearAll}
             disabled={scannedCards.length === 0}

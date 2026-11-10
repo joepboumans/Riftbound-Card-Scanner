@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import CardImage from '../CardImage.jsx';
 import { resolveCardImageSource } from '../../lib/cardMatcher.js';
+import { fullNameOf } from '../../lib/cardData.js';
 import { CHOICE_STRIP_HOLD_MS, CHOICE_STRIP_INITIAL, choiceStripReducer, choiceStripView } from '../../lib/userConfirmation.js';
 import { useChoiceKeys } from '../../hooks/useChoiceKeys.js';
 
@@ -15,12 +16,12 @@ export function CandidateTile({ card, rank, onPick, confirming = false, classNam
   const border = confirming ? 'border-emerald-400 ring-2 ring-emerald-400/60 animate-pulse'
     : rank === 1 ? 'border-gold-400/70 bg-gold-500/10' : 'border-white/15';
   return (
-    <button type="button" onClick={() => onPick(card, rank)} aria-label={`Use ${card.name} ${card.code || card.id}`}
+    <button type="button" onClick={() => onPick(card, rank)} aria-label={`Use ${fullNameOf(card)} ${card.code || card.id}`}
       className={`relative rounded-xl border p-2 text-left hover:border-gold-400 ${border} ${className}`}>
       {confirming && <span className="absolute left-1 top-1 rounded bg-emerald-500/90 px-1 text-[10px] font-semibold text-black">Confirming</span>}
       <span className="absolute right-1 top-1"><ChoiceKey>{rank === 1 ? '1 / Enter' : rank}</ChoiceKey></span>
-      <CardImage src={resolveCardImageSource(card.imageUrl, card.id)} alt={card.name} className="mx-auto h-32 rounded-md object-contain" />
-      <span className="mt-1 block truncate text-xs font-semibold text-white">{card.name}</span>
+      <CardImage src={resolveCardImageSource(card.imageUrl, card.id)} alt={fullNameOf(card)} className="mx-auto h-32 rounded-md object-contain" />
+      <span className="mt-1 block truncate text-xs font-semibold text-white">{fullNameOf(card)}</span>
       <span className="block truncate text-[10px] text-rift-300">{card.code || card.id}</span>
       <span className="mt-1 block h-1 rounded bg-white/10"><span className="block h-full rounded bg-gold-400" style={{ width: percent(card) }} /></span>
       <span className="block text-[10px] text-rift-300">{percent(card)} match</span>

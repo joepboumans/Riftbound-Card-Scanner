@@ -1,0 +1,742 @@
+{
+  "props": {
+    "pageProps": {
+      "page": {
+        "blades": [
+          {
+            "type": "riotbar",
+            "productId": "riftbound"
+          },
+          {
+            "type": "textMasthead"
+          },
+          {
+            "type": "riftboundCardGallery",
+            "fragmentId": "card-gallery",
+            "cards": {
+              "items": [
+                {
+                  "id": "ogn-247-298",
+                  "collectorNumber": 247,
+                  "name": "Daughter of the Void",
+                  "set": {
+                    "label": "Card Set",
+                    "value": {
+                      "id": "OGN",
+                      "label": "Origins"
+                    }
+                  },
+                  "cardType": {
+                    "label": "Card Type",
+                    "type": [
+                      {
+                        "id": "legend",
+                        "label": "Legend",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/59e98d14f83125c88880af1d61213e3aef941370-64x64.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 64,
+                            "height": 64,
+                            "aspectRatio": 1
+                          },
+                          "mimeType": "image/png"
+                        }
+                      }
+                    ]
+                  },
+                  "publicCode": "OGN-247/298",
+                  "rarity": {
+                    "label": "Rarity",
+                    "value": {
+                      "id": "rare",
+                      "label": "Rare",
+                      "icon": {
+                        "type": "image",
+                        "provider": "sanity",
+                        "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/d90078e1ec2ef7cbcbba2be86da1b192c389581a-429x425.png?accountingTag=RB",
+                        "dimensions": {
+                          "width": 429,
+                          "height": 425,
+                          "aspectRatio": 1.0094117647058825
+                        },
+                        "colors": {
+                          "primary": "#B881A9",
+                          "secondary": "#332932",
+                          "label": "#804570"
+                        },
+                        "mimeType": "image/png"
+                      }
+                    }
+                  },
+                  "domain": {
+                    "label": "Domain",
+                    "values": [
+                      {
+                        "id": "fury",
+                        "label": "Fury",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5aeb4bfd203b5d265902f65aa5afae7da1682eaa-64x64.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 64,
+                            "height": 64,
+                            "aspectRatio": 1
+                          },
+                          "colors": {
+                            "primary": "#1A0D0E",
+                            "secondary": "#F9DCDE",
+                            "label": "#000000"
+                          },
+                          "mimeType": "image/png"
+                        }
+                      },
+                      {
+                        "id": "mind",
+                        "label": "Mind",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/17ab95a6bd052085b6803d846a287f625f347288-64x64.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 64,
+                            "height": 64,
+                            "aspectRatio": 1
+                          },
+                          "colors": {
+                            "primary": "#0C1418",
+                            "secondary": "#D6F0FF",
+                            "label": "#000000"
+                          },
+                          "mimeType": "image/png"
+                        }
+                      }
+                    ]
+                  },
+                  "cardImage": {
+                    "type": "image",
+                    "provider": "sanity",
+                    "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/3ea826277086945a2cdfda4e41b771075aa8b15b-744x1039.png?accountingTag=RB",
+                    "accessibilityText": "Riftbound Legend: Daughter of the Void. [T]: [Reaction] — [Add] [C]. Use only to play spells. (Abilities that add resources can't be reacted to.)",
+                    "dimensions": {
+                      "width": 744,
+                      "height": 1039,
+                      "aspectRatio": 0.7160731472569779
+                    },
+                    "colors": {
+                      "primary": "#231217",
+                      "secondary": "#F9EEDC",
+                      "label": "#000000"
+                    },
+                    "mimeType": "image/png"
+                  },
+                  "orientation": "portrait",
+                  "illustrator": {
+                    "label": "Artist",
+                    "values": [
+                      {
+                        "id": "kudosproductions",
+                        "label": "Kudos Productions",
+                        "icon": {
+                          "type": "image",
+                          "provider": "web",
+                          "url": "https://assetcdn.rgpub.io/public/live/riot-shared/player-experiences/riot-glyphs/rb/latest/artist.svg"
+                        }
+                      }
+                    ]
+                  },
+                  "text": {
+                    "label": "Ability",
+                    "richText": {
+                      "type": "html",
+                      "body": "<p>:rb_exhaust:: [Reaction] — [Add] :rb_rune_rainbow:. Use only to play spells. (Abilities that add resources can't be reacted to.)</p>"
+                    }
+                  },
+                  "tags": {
+                    "label": "Tags",
+                    "tags": [
+                      "Kai'Sa"
+                    ]
+                  }
+                },
+                {
+                  "id": "ogn-299-star-298",
+                  "collectorNumber": 299,
+                  "name": "Daughter of the Void",
+                  "set": {
+                    "label": "Card Set",
+                    "value": {
+                      "id": "OGN",
+                      "label": "Origins"
+                    }
+                  },
+                  "cardType": {
+                    "label": "Card Type",
+                    "type": [
+                      {
+                        "id": "legend",
+                        "label": "Legend",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/59e98d14f83125c88880af1d61213e3aef941370-64x64.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 64,
+                            "height": 64,
+                            "aspectRatio": 1
+                          },
+                          "mimeType": "image/png"
+                        }
+                      }
+                    ]
+                  },
+                  "publicCode": "OGN-299*/298",
+                  "rarity": {
+                    "label": "Rarity",
+                    "value": {
+                      "id": "showcase",
+                      "label": "Showcase",
+                      "icon": {
+                        "type": "image",
+                        "provider": "sanity",
+                        "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/a0e92b9edf3291fa62c9b35ffd6363de0d7947c0-376x426.png?accountingTag=RB",
+                        "dimensions": {
+                          "width": 376,
+                          "height": 426,
+                          "aspectRatio": 0.8826291079812206
+                        },
+                        "colors": {
+                          "primary": "#B89D3B",
+                          "secondary": "#333229",
+                          "label": "#4F472B"
+                        },
+                        "mimeType": "image/png"
+                      }
+                    }
+                  },
+                  "domain": {
+                    "label": "Domain",
+                    "values": [
+                      {
+                        "id": "fury",
+                        "label": "Fury",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/5aeb4bfd203b5d265902f65aa5afae7da1682eaa-64x64.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 64,
+                            "height": 64,
+                            "aspectRatio": 1
+                          },
+                          "colors": {
+                            "primary": "#1A0D0E",
+                            "secondary": "#F9DCDE",
+                            "label": "#000000"
+                          },
+                          "mimeType": "image/png"
+                        }
+                      },
+                      {
+                        "id": "mind",
+                        "label": "Mind",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/17ab95a6bd052085b6803d846a287f625f347288-64x64.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 64,
+                            "height": 64,
+                            "aspectRatio": 1
+                          },
+                          "colors": {
+                            "primary": "#0C1418",
+                            "secondary": "#D6F0FF",
+                            "label": "#000000"
+                          },
+                          "mimeType": "image/png"
+                        }
+                      }
+                    ]
+                  },
+                  "cardImage": {
+                    "type": "image",
+                    "provider": "sanity",
+                    "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/ae8e68af43400f61f7391c0a6ee339fd718a7540-1488x2078.png?accountingTag=RB",
+                    "accessibilityText": "Riftbound Legend: Daughter of the Void. [T]: [Reaction] — [Add] [C]. Use only to play spells. (Abilities that add resources can't be reacted to.)",
+                    "dimensions": {
+                      "width": 1488,
+                      "height": 2078,
+                      "aspectRatio": 0.7160731472569779
+                    },
+                    "colors": {
+                      "primary": "#110811",
+                      "secondary": "#FFD6FA",
+                      "label": "#000000"
+                    },
+                    "mimeType": "image/png"
+                  },
+                  "orientation": "portrait",
+                  "illustrator": {
+                    "label": "Artist",
+                    "values": [
+                      {
+                        "id": "jasonchan",
+                        "label": "Jason Chan",
+                        "icon": {
+                          "type": "image",
+                          "provider": "web",
+                          "url": "https://assetcdn.rgpub.io/public/live/riot-shared/player-experiences/riot-glyphs/rb/latest/artist.svg"
+                        }
+                      }
+                    ]
+                  },
+                  "text": {
+                    "label": "Ability",
+                    "richText": {
+                      "type": "html",
+                      "body": "<p>:rb_exhaust:: [Reaction] — [Add] :rb_rune_rainbow:. Use only to play spells. (Abilities that add resources can't be reacted to.)</p>"
+                    }
+                  },
+                  "tags": {
+                    "label": "Tags",
+                    "tags": [
+                      "Kai'Sa"
+                    ]
+                  }
+                },
+                {
+                  "id": "rad-sp4-005",
+                  "collectorNumber": 4,
+                  "name": "Kai'Sa",
+                  "subtitle": "Rebel",
+                  "set": {
+                    "label": "Card Set",
+                    "value": {
+                      "id": "RAD",
+                      "label": "Radiance"
+                    }
+                  },
+                  "cardType": {
+                    "label": "Card Type",
+                    "type": [
+                      {
+                        "id": "unit",
+                        "label": "Unit",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/cb0caf49361546ece0c25d65b7fbf57c0eee57f0-64x64.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 64,
+                            "height": 64,
+                            "aspectRatio": 1
+                          },
+                          "mimeType": "image/png"
+                        }
+                      }
+                    ],
+                    "superType": [
+                      {
+                        "id": "champion",
+                        "label": "Champion",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/c56f1df327f53562a56b493d3d38c3cee5780c5a-64x64.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 64,
+                            "height": 64,
+                            "aspectRatio": 1
+                          },
+                          "mimeType": "image/png"
+                        }
+                      }
+                    ]
+                  },
+                  "publicCode": "RAD-SP4/005",
+                  "rarity": {
+                    "label": "Rarity",
+                    "value": {
+                      "id": "showcase",
+                      "label": "Showcase",
+                      "icon": {
+                        "type": "image",
+                        "provider": "sanity",
+                        "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/a0e92b9edf3291fa62c9b35ffd6363de0d7947c0-376x426.png?accountingTag=RB",
+                        "dimensions": {
+                          "width": 376,
+                          "height": 426,
+                          "aspectRatio": 0.8826291079812206
+                        },
+                        "colors": {
+                          "primary": "#B89D3B",
+                          "secondary": "#333229",
+                          "label": "#4F472B"
+                        },
+                        "mimeType": "image/png"
+                      }
+                    }
+                  },
+                  "domain": {
+                    "label": "Domain",
+                    "values": [
+                      {
+                        "id": "mind",
+                        "label": "Mind",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/17ab95a6bd052085b6803d846a287f625f347288-64x64.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 64,
+                            "height": 64,
+                            "aspectRatio": 1
+                          },
+                          "colors": {
+                            "primary": "#0C1418",
+                            "secondary": "#D6F0FF",
+                            "label": "#000000"
+                          },
+                          "mimeType": "image/png"
+                        }
+                      }
+                    ]
+                  },
+                  "cardImage": {
+                    "type": "image",
+                    "provider": "sanity",
+                    "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/1c1bc3c006b5acf9013e98072a135ae411b2ccac-744x1039.png?accountingTag=RB",
+                    "accessibilityText": "Riftbound Unit: Kai'Sa, Rebel. [Disarm]\nWhile I'm in a showdown, your spells have [Reaction].",
+                    "dimensions": {
+                      "width": 744,
+                      "height": 1039,
+                      "aspectRatio": 0.7160731472569779
+                    },
+                    "colors": {
+                      "primary": "#2D3159",
+                      "secondary": "#E2DCF9",
+                      "label": "#0C1132"
+                    },
+                    "mimeType": "image/png"
+                  },
+                  "orientation": "portrait",
+                  "illustrator": {
+                    "label": "Artist",
+                    "values": [
+                      {
+                        "id": "zhongqili",
+                        "label": "Zhongqi Li",
+                        "icon": {
+                          "type": "image",
+                          "provider": "web",
+                          "url": "https://assetcdn.rgpub.io/public/live/riot-shared/player-experiences/riot-glyphs/rb/latest/artist.svg"
+                        }
+                      }
+                    ]
+                  },
+                  "text": {
+                    "label": "Ability",
+                    "richText": {
+                      "type": "html",
+                      "body": "<p>[Disarm]<br />While I'm in a showdown, your spells have [Reaction].</p>"
+                    }
+                  },
+                  "energy": {
+                    "label": "Energy",
+                    "value": {
+                      "id": 5,
+                      "label": "5"
+                    }
+                  },
+                  "might": {
+                    "label": "Might",
+                    "value": {
+                      "id": 5,
+                      "label": "5",
+                      "icon": {
+                        "type": "image",
+                        "provider": "web",
+                        "url": "https://assetcdn.rgpub.io/public/live/riot-shared/player-experiences/riot-glyphs/rb/latest/might.svg"
+                      }
+                    }
+                  },
+                  "power": {
+                    "label": "Power",
+                    "value": {
+                      "id": 1,
+                      "label": "1",
+                      "icon": {
+                        "type": "image",
+                        "provider": "web",
+                        "url": "https://assetcdn.rgpub.io/public/live/riot-shared/player-experiences/riot-glyphs/rb/latest/card_type_rune.svg"
+                      }
+                    }
+                  },
+                  "tags": {
+                    "label": "Tags",
+                    "tags": [
+                      "Kai'Sa",
+                      "The Void"
+                    ]
+                  }
+                },
+                {
+                  "id": "unl-t04",
+                  "collectorNumber": 4,
+                  "name": "Buff",
+                  "set": {
+                    "label": "Card Set",
+                    "value": {
+                      "id": "UNL",
+                      "label": "Unleashed"
+                    }
+                  },
+                  "cardType": {
+                    "label": "Card Type",
+                    "type": [],
+                    "superType": [
+                      {
+                        "id": "token",
+                        "label": "Token"
+                      }
+                    ]
+                  },
+                  "publicCode": "UNL-T04",
+                  "rarity": {
+                    "label": "Rarity",
+                    "value": {
+                      "id": "common",
+                      "label": "Common",
+                      "icon": {
+                        "type": "image",
+                        "provider": "sanity",
+                        "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/a088ae851d94b5c34aa4900e8ccb4cc103144dce-354x354.png?accountingTag=RB",
+                        "dimensions": {
+                          "width": 354,
+                          "height": 354,
+                          "aspectRatio": 1
+                        },
+                        "colors": {
+                          "primary": "#A4B8AA",
+                          "secondary": "#293333",
+                          "label": "#3A6C49"
+                        },
+                        "mimeType": "image/png"
+                      }
+                    }
+                  },
+                  "domain": {
+                    "label": "Domain",
+                    "values": [
+                      {
+                        "id": "colorless",
+                        "label": "Colorless"
+                      }
+                    ]
+                  },
+                  "cardImage": {
+                    "type": "image",
+                    "provider": "sanity",
+                    "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/64b9df938587aa93a3d0769a349d9b0cc6942dc2-744x1039.png?accountingTag=RB",
+                    "accessibilityText": "Riftbound : Buff. A unit may have no more than one buff at a time.",
+                    "dimensions": {
+                      "width": 744,
+                      "height": 1039,
+                      "aspectRatio": 0.7160731472569779
+                    },
+                    "colors": {
+                      "primary": "#18182F",
+                      "secondary": "#F9E0DC",
+                      "label": "#000000"
+                    },
+                    "mimeType": "image/png"
+                  },
+                  "orientation": "portrait",
+                  "illustrator": {
+                    "label": "Artist",
+                    "values": [
+                      {
+                        "id": "leaguesplashteam",
+                        "label": "League Splash Team",
+                        "icon": {
+                          "type": "image",
+                          "provider": "web",
+                          "url": "https://assetcdn.rgpub.io/public/live/riot-shared/player-experiences/riot-glyphs/rb/latest/artist.svg"
+                        }
+                      }
+                    ]
+                  },
+                  "text": {
+                    "label": "Ability",
+                    "richText": {
+                      "type": "html",
+                      "body": "<p>A unit may have no more than one buff at a time.</p>"
+                    }
+                  },
+                  "might": {
+                    "label": "Might",
+                    "value": {
+                      "id": 1,
+                      "label": "1",
+                      "icon": {
+                        "type": "image",
+                        "provider": "web",
+                        "url": "https://assetcdn.rgpub.io/public/live/riot-shared/player-experiences/riot-glyphs/rb/latest/might.svg"
+                      }
+                    }
+                  }
+                },
+                {
+                  "id": "ogn-126-298",
+                  "collectorNumber": 126,
+                  "name": "Body Rune",
+                  "set": {
+                    "label": "Card Set",
+                    "value": {
+                      "id": "OGN",
+                      "label": "Origins"
+                    }
+                  },
+                  "cardType": {
+                    "label": "Card Type",
+                    "type": [
+                      {
+                        "id": "rune",
+                        "label": "Rune",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/fa3d8362379b722a5025995077a7fbd1b4a6ba0e-24x24.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 24,
+                            "height": 24,
+                            "aspectRatio": 1
+                          },
+                          "mimeType": "image/png"
+                        }
+                      }
+                    ],
+                    "superType": [
+                      {
+                        "id": "basic",
+                        "label": "Basic"
+                      }
+                    ]
+                  },
+                  "publicCode": "OGN-126/298",
+                  "rarity": {
+                    "label": "Rarity",
+                    "value": {
+                      "id": "common",
+                      "label": "Common",
+                      "icon": {
+                        "type": "image",
+                        "provider": "sanity",
+                        "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/a088ae851d94b5c34aa4900e8ccb4cc103144dce-354x354.png?accountingTag=RB",
+                        "dimensions": {
+                          "width": 354,
+                          "height": 354,
+                          "aspectRatio": 1
+                        },
+                        "colors": {
+                          "primary": "#A4B8AA",
+                          "secondary": "#293333",
+                          "label": "#3A6C49"
+                        },
+                        "mimeType": "image/png"
+                      }
+                    }
+                  },
+                  "domain": {
+                    "label": "Domain",
+                    "values": [
+                      {
+                        "id": "body",
+                        "label": "Body",
+                        "icon": {
+                          "type": "image",
+                          "provider": "sanity",
+                          "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/7a5533034de5870808347bc4b296f0029bdd8eea-64x64.png?accountingTag=RB",
+                          "dimensions": {
+                            "width": 64,
+                            "height": 64,
+                            "aspectRatio": 1
+                          },
+                          "colors": {
+                            "primary": "#221A11",
+                            "secondary": "#F9EADC",
+                            "label": "#000000"
+                          },
+                          "mimeType": "image/png"
+                        }
+                      }
+                    ]
+                  },
+                  "cardImage": {
+                    "type": "image",
+                    "provider": "sanity",
+                    "url": "https://cmsassets.rgpub.io/sanity/images/dsfx7636/game_data_live/3b3c3c07626d6180457c849047e0228dc0d19539-744x1039.png?accountingTag=RB",
+                    "accessibilityText": "Riftbound Rune: Body Rune.",
+                    "dimensions": {
+                      "width": 744,
+                      "height": 1039,
+                      "aspectRatio": 0.7160731472569779
+                    },
+                    "colors": {
+                      "primary": "#B85E31",
+                      "secondary": "#332929",
+                      "label": "#150F0B"
+                    },
+                    "mimeType": "image/png"
+                  },
+                  "orientation": "portrait",
+                  "illustrator": {
+                    "label": "Artist",
+                    "values": [
+                      {
+                        "id": "gregghielmettileahchen",
+                        "label": "Greg Ghielmetti & Leah Chen",
+                        "icon": {
+                          "type": "image",
+                          "provider": "web",
+                          "url": "https://assetcdn.rgpub.io/public/live/riot-shared/player-experiences/riot-glyphs/rb/latest/artist.svg"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ],
+              "async": {
+                "linkdata": {
+                  "self": "/publishing-content/v2.0/public/channel/riftbound_website/list/riftbound_gallery_cards?locale=en_US&from=0&limit=200",
+                  "first": "/publishing-content/v2.0/public/channel/riftbound_website/list/riftbound_gallery_cards?locale=en_US&from=0&limit=200",
+                  "last": "/publishing-content/v2.0/public/channel/riftbound_website/list/riftbound_gallery_cards?locale=en_US&from=1400&limit=200",
+                  "next": "/publishing-content/v2.0/public/channel/riftbound_website/list/riftbound_gallery_cards?locale=en_US&from=200&limit=200"
+                },
+                "metadata": {
+                  "channelHostname": "playriftbound.com",
+                  "channelMachineName": "riftbound_website",
+                  "overrideSize": 0,
+                  "resultsUpdatedAt": "2026-11-08T14:29:51.065369606Z",
+                  "smartListMachineName": "riftbound_gallery_cards",
+                  "from": 0,
+                  "limit": 200,
+                  "totalItems": 1416,
+                  "totalPages": 8,
+                  "locale": "en-us",
+                  "ssr": true,
+                  "prefetchAll": true
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "__N_SSG": true
+  },
+  "page": "/[[...pathArray]]"
+}

@@ -4,7 +4,8 @@ import { DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from '../../data/sampleCards
 import { getMatcher, resolveCardImageSource } from '../../lib/cardMatcher.js';
 import { formatPrice, getPriceValue } from '../../lib/priceFormat.js';
 import CardImage from '../CardImage.jsx';
-import { resolveCardData } from '../../lib/cardData.js';
+import { codeLabelOf, fullNameOf, resolveCardData } from '../../lib/cardData.js';
+import { searchCards } from '../../lib/cardSearch.js';
 import { getLearnedReferences } from '../../lib/learnedReferences.js';
 
 export default function CardDetailPanel({
@@ -92,11 +93,9 @@ export default function CardDetailPanel({
     setSearchQuery('');
   };
 
-  // Compute search results (filter all cards by name)
-  const searchResults = searchOpen && searchQuery.length >= 2
-    ? getMatcher().cards
-        .filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
-        .slice(0, 8)
+  // Search all cards by full name, printed name or code, from 2 characters on
+  const searchResults = searchOpen && searchQuery.trim().length >= 2
+    ? searchCards(getMatcher().cards, searchQuery).slice(0, 8)
     : [];
 
   // Auto-focus search input when opened and scroll into view
@@ -185,7 +184,7 @@ export default function CardDetailPanel({
           {/* Info */}
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-rift-100 truncate">
-              {activeMatch ? activeMatch.name : `Detection #${index + 1}`}
+              {activeMatch ? fullNameOf(activeMatch) : `Detection #${index + 1}`}
             </p>
             {entry?.userConfirmed && (
               <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200"
@@ -289,10 +288,9 @@ export default function CardDetailPanel({
             <div className="space-y-3">
               {/* Name and set */}
               <div>
-                <h3 className="text-base font-bold text-rift-100">{cardData.name}</h3>
+                <h3 className="text-base font-bold text-rift-100">{fullNameOf(cardData)}</h3>
                 <p className="text-xs text-rift-400">
-                  {cardData.setName} ({cardData.set}) · #{cardData.collectorNumber}
-                  {cardData.code && <span className="text-rift-400 ml-1">· {cardData.code}</span>}
+                  {cardData.setName} ({cardData.set}) · {codeLabelOf(cardData)}
                 </p>
               </div>
 
@@ -494,9 +492,9 @@ export default function CardDetailPanel({
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className={`text-xs truncate ${isActive ? 'text-gold-300 font-semibold' : 'text-rift-200'}`}>
-                            {match.name}
+                            {fullNameOf(match)}
                           </span>
-                          <span className="text-[10px] text-rift-500">[{match.set}]</span>
+                          <span className="text-[10px] text-rift-500">{match.code || `[${match.set}]`}</span>
                         </div>
                         <div className="h-1 rounded-full bg-rift-700 overflow-hidden mt-0.5">
                           <div
@@ -574,8 +572,8 @@ export default function CardDetailPanel({
                         className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left bg-rift-800/50 hover:bg-rift-600/50 transition-colors"
                       >
                         <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: ds.hex }} />
-                        <span className="text-xs text-rift-100 truncate flex-1">{card.name}</span>
-                        <span className="text-[10px] text-rift-400 flex-shrink-0">[{card.set}]</span>
+                        <span className="text-xs text-rift-100 truncate flex-1">{fullNameOf(card)}</span>
+                        <span className="text-[10px] text-rift-400 flex-shrink-0">{card.code || `[${card.set}]`}</span>
                       </button>
                     );
                   })}

@@ -8,6 +8,7 @@ import { loadMatcherDatabase, saveMatcherDatabase } from './indexedDB.js';
 import { isDesktopRuntime, resolveAppUrl } from './runtime.js';
 import { describeFeatures, compareFeatures, MIN_STRUCTURE_NORM } from './cardSimilarity.js';
 import { areaColorGrid } from './cardFeatures.js';
+import { withFullNames } from './cardData.js';
 import { describeLocalArtwork, compareLocalArtwork, compareAlignedArtwork, artworkDetailScore } from './localArtwork.js';
 
 const HASHES_URL = resolveAppUrl(`/card-hashes.json?v=${__BUILD_TIME__}`);
@@ -112,13 +113,59 @@ export function filterCardsBySet(cards, setFilter) {
   return cards.filter((card) => selectedSetLookup.has(String(card.set || '').toUpperCase()));
 }
 
-// Supplement an imported database after an app update, preserving newer local
-// records and image paths. Different feature grids cannot be mixed.
+// The gallery image a card record was hashed from. Desktop updates keep a local
+// image path in `imageUrl` and the gallery URL in `sourceImageUrl`; bundled
+// records carry the gallery URL in `imageUrl`. Empty when unknown.
+export function sourceImageUrlOf(card) {
+  if (card?.sourceImageUrl) return card.sourceImageUrl;
+  return /^https?:/i.test(card?.imageUrl || '') ? card.imageUrl : '';
+}
+
+const sameValue = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+
+// The bundled card's metadata over the local record. The local features and
+// image path stay unless the bundled card was hashed from another image.
+function refreshFromBundled(local, bundled) {
+  const localSource = sourceImageUrlOf(local);
+  const bundledSource = sourceImageUrlOf(bundled);
+  if (localSource && bundledSource && localSource !== bundledSource) return bundled;
+  const refreshed = { ...local, ...bundled, f: local.f, imageUrl: local.imageUrl };
+  if (local.sourceImageUrl !== undefined || bundledSource) refreshed.sourceImageUrl = localSource || bundledSource;
+  const changed = Object.keys(refreshed).some((key) => key !== 'f' && !sameValue(refreshed[key], local[key]));
+  return changed ? refreshed : local;
+}
+
+// Top up an imported database after an app update: refresh metadata of known
+// cards, add missing ones and never delete. Different feature grids cannot be mixed.
 export function supplementWithBundledCards(local, bundled) {
   if (local.gridSize !== bundled.gridSize) return local;
+  const bundledById = new Map(bundled.cards.map((card) => [card.id, card]));
+  let changed = false;
+  const cards = local.cards.map((card) => {
+    const bundledCard = bundledById.get(card.id);
+    const refreshed = bundledCard ? refreshFromBundled(card, bundledCard) : card;
+    if (refreshed !== card) changed = true;
+    return refreshed;
+  });
   const ids = new Set(local.cards.map((card) => card.id));
   const missing = bundled.cards.filter((card) => !ids.has(card.id));
-  return missing.length ? { ...local, cards: [...local.cards, ...missing] } : local;
+  return changed || missing.length ? { ...local, cards: [...cards, ...missing] } : local;
+}
+
+// Merge an in-app update into the local card database. Re-hashed and new cards
+// replace whole; metadata-only records (no features) keep the local features
+// and image path. Cards missing from the update are never deleted.
+export function mergeCardDatabaseUpdate(existing, update) {
+  const cardsById = new Map((existing?.cards || []).map((card) => [card.id, card]));
+  for (const card of update?.cards || []) {
+    const local = cardsById.get(card.id);
+    if (card.f) cardsById.set(card.id, card);
+    else if (local) cardsById.set(card.id, { ...local, ...card });
+  }
+  return {
+    gridSize: update?.gridSize || existing?.gridSize,
+    cards: [...cardsById.values()],
+  };
 }
 
 class CardMatcher {
@@ -183,7 +230,7 @@ class CardMatcher {
     this.revision = (this.revision || 0) + 1;
     this._tmpCanvas = null;
     this.gridSize = database.gridSize;
-    this.cards = (database.cards || []).map((card) => {
+    this.cards = withFullNames(database.cards || []).map((card) => {
       const f = card.f instanceof Float32Array ? card.f : new Float32Array(card.f);
       return { ...card, f, featureStats: describeFeatures(f), localArtwork: describeLocalArtwork(f, this.gridSize),
         broadArtwork: describeLocalArtwork(f,this.gridSize,{radius:Math.max(1,Math.round(this.gridSize/4))}) };
