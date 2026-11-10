@@ -4,6 +4,7 @@ import { getScanGuide } from '../../lib/scanGeometry.js';
 import { getScanGuidance } from '../../lib/scanQuality.js';
 import { saveNativeFrame, openNativeFrameFolder, nativeFrameDiagnostics } from '../../lib/nativeFrame.js';
 import { resolveCardImageSource } from '../../lib/cardMatcher.js';
+import { fullNameOf } from '../../lib/cardData.js';
 import CardImage from '../CardImage.jsx';
 import { openDebugScanFolder } from '../../lib/debugScanCapture.js';
 import { getScanEvidence } from '../../lib/scanEvidence.js';
@@ -362,11 +363,11 @@ export default function ScannerCamera({
           {scanOverlayVisible && !debugOverlayEnabled && !choiceStripEnabled && hasDetection && lastDetection.cardData && (
             <div role="status" aria-label="Tracked card preview" className="flex max-w-[17rem] items-center gap-3 rounded-xl border border-gold-400/30 bg-black/75 p-3 backdrop-blur-sm shadow-lg shadow-black/30">
               <div className="h-24 w-16 shrink-0 overflow-hidden rounded-md bg-rift-800">
-                <CardImage src={resolveCardImageSource(lastDetection.cardData.imageUrl, lastDetection.cardData.id)} alt={lastDetection.cardData.name} className="h-full w-full object-contain" />
+                <CardImage src={resolveCardImageSource(lastDetection.cardData.imageUrl, lastDetection.cardData.id)} alt={fullNameOf(lastDetection.cardData)} className="h-full w-full object-contain" />
               </div>
               <div className="min-w-0">
                 <div className="text-[10px] font-semibold text-gold-300">{lastDetection.matched ? 'Confirming card' : 'Checking card'}</div>
-                <div className="mt-1 break-words text-sm font-semibold text-white">{lastDetection.cardData.name}</div>
+                <div className="mt-1 break-words text-sm font-semibold text-white">{fullNameOf(lastDetection.cardData)}</div>
                 <div className="mt-1 text-[10px] text-rift-300">{lastDetection.cardData.code || lastDetection.cardData.id}</div>
               </div>
             </div>

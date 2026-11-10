@@ -1,4 +1,5 @@
 import { isFoilOnly } from '../data/sampleCards.js';
+import { resolveCardData } from './cardData.js';
 
 let nextEntryId = 0;
 
@@ -21,11 +22,14 @@ export function createCardEntry(payload, defaults = {}) {
   };
 }
 
-// Add stable row identities to older localStorage saves without merging rows.
-export function restoreCardEntries(entries = []) {
+// Add stable row identities to older localStorage saves without merging rows,
+// and refresh each entry's card data from the card database by id.
+export function restoreCardEntries(entries = [], cards = []) {
   const usedIds = new Set();
+  const cardsById = new Map(cards.map((card) => [card.id, card]));
   return entries.map((entry) => {
-    const restored = createCardEntry(entry);
+    const current = cardsById.get(entry.cardData?.id);
+    const restored = createCardEntry(current ? { ...entry, cardData: resolveCardData(current) } : entry);
     if (usedIds.has(restored.entryId)) restored.entryId = createEntryId();
     usedIds.add(restored.entryId);
     return restored;
@@ -42,6 +46,13 @@ export function getCardVariantKey(entry) {
   ]);
 }
 
+// A pending row keeps the learned references of every user-confirmed scan
+// merged into it, oldest first, so removing the row can undo them all.
+function mergedLearnedReferenceIds(row, entry) {
+  const ids = [...(row.learnedReferenceIds || []), ...(entry.learnedReferenceIds || [])];
+  return ids.length ? { learnedReferenceIds: ids } : {};
+}
+
 export function mergeCardEntries(existing, incoming) {
   const updated = [...existing];
   for (const payload of incoming) {
@@ -55,7 +66,8 @@ export function mergeCardEntries(existing, incoming) {
       }
       updated.push(entry);
     } else {
-      updated[index] = { ...updated[index], quantity: updated[index].quantity + entry.quantity };
+      updated[index] = { ...updated[index], quantity: updated[index].quantity + entry.quantity,
+        ...mergedLearnedReferenceIds(updated[index], entry) };
     }
   }
   return updated;

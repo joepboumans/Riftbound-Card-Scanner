@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import AppShell from './components/AppShell.jsx';
 import BottomTabBar from './components/BottomTabBar.jsx';
 import ToastNotification from './components/ToastNotification.jsx';
+import NewPrintNotice from './components/NewPrintNotice.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
 import ManualScanReview from './components/scanner/ManualScanReview.jsx';
 import CandidateSearch from './components/scanner/CandidateSearch.jsx';
@@ -15,8 +16,9 @@ import { useCamera } from './hooks/useCamera.js';
 import { useCardDetection } from './hooks/useCardDetection.js';
 import { useAutoScan } from './hooks/useAutoScan.js';
 import { useScanSound } from './hooks/useScanSound.js';
-import { downloadCSV, validateForExport, EXPORT_FORMATS } from './lib/csvExporter.js';
-import { getMatcher } from './lib/cardMatcher.js';
+import { useNewPrintCheck } from './hooks/useNewPrintCheck.js';
+import { downloadCSV, copyDeckList, validateForExport, EXPORT_FORMATS } from './lib/csvExporter.js';
+import { getMatcher, mergeCardDatabaseUpdate, sourceImageUrlOf } from './lib/cardMatcher.js';
 import { buildScanSetOptions, summarizeScanSetCoverage } from './lib/scanSets.js';
 import { isDesktopRuntime } from './lib/runtime.js';
 import { invokeDesktopCommand } from './lib/desktopBridge.js';
@@ -28,7 +30,9 @@ import { isFoilOnly } from './data/sampleCards.js';
 import { normalizeCameraProfile } from './lib/cameraControls.js';
 import { isReliableScanResult } from './lib/scanQuality.js';
 import { createUserConfirmedEntry, onUserConfirmed, isDuplicateAdd } from './lib/userConfirmation.js';
+import { getLearnedReferences } from './lib/learnedReferences.js';
 import { getScanArtwork } from './lib/scanEvidence.js';
+import { fullNameOf } from './lib/cardData.js';
 import { createCardEntry, createEntryId, restoreCardEntries, getCardVariantKey, mergeCardEntries, matchesPendingScan } from './lib/collection.js';
 import { persistUserSnapshot } from './lib/userStorage.js';
 import { SCAN_SOUND_STORAGE_KEY } from './lib/scanSound.js';
@@ -85,19 +89,9 @@ function loadFromStorage(key, fallback) {
   }
 }
 
-function mergeCardDatabases(existingDatabase, updateDatabase) {
-  const cardsById = new Map(
-    (existingDatabase?.cards || []).map((card) => [card.id, card])
-  );
-
-  for (const card of updateDatabase?.cards || []) {
-    cardsById.set(card.id, card);
-  }
-
-  return {
-    gridSize: updateDatabase?.gridSize || existingDatabase?.gridSize,
-    cards: [...cardsById.values()],
-  };
+// Undoing a wrong pick: its user-confirmed scans must not teach the matcher.
+function forgetLearnedReferences(ids = []) {
+  for (const id of ids) getLearnedReferences().remove(id);
 }
 
 export default function App() {
@@ -164,6 +158,12 @@ export default function App() {
     return normalized && normalized !== 'ALL' ? [normalized] : [];
   });
   const [scanSetOptions, setScanSetOptions] = useState([{ value: 'all', label: 'All sets' }]);
+  // Each card database load also refreshes saved entries' card data by id.
+  const applyCardDatabase = useCallback((cards) => {
+    setScanSetOptions(buildScanSetOptions(cards));
+    setPendingCards((entries) => restoreCardEntries(entries, cards));
+    setScannedCards((entries) => restoreCardEntries(entries, cards));
+  }, []);
 
   const [priceSyncBusy, setPriceSyncBusy] = useState(false);
   const [cardDatabaseBusy, setCardDatabaseBusy] = useState(false);
@@ -381,7 +381,7 @@ export default function App() {
 
     const matcher = getMatcher();
     await matcher.setDatabase(parsed);
-    setScanSetOptions(buildScanSetOptions(matcher.cards));
+    applyCardDatabase(matcher.cards);
 
     const loadedCount = parsed.cards.length;
     showNotification(`Card database updated — ${loadedCount} cards loaded`, 'success');
@@ -390,7 +390,7 @@ export default function App() {
       setInitError(null);
       setInitErrorType(null);
     }
-  }, [initErrorType, showNotification]);
+  }, [applyCardDatabase, initErrorType, showNotification]);
 
   const processCardDatabaseText = useCallback(async (text) => {
     await processCardDatabase(JSON.parse(text));
@@ -443,7 +443,7 @@ export default function App() {
       setLoadStage('matcher');
       const matcher = getMatcher();
       await matcher.initialize();
-      setScanSetOptions(buildScanSetOptions(matcher.cards));
+      applyCardDatabase(matcher.cards);
       setLoadProgress(0.85);
 
       // Done
@@ -458,7 +458,7 @@ export default function App() {
       setInitErrorType(formatted.type);
       setIsLoading(false);
     }
-  }, [detection.initDetector, formatInitError, modelPreference]);
+  }, [applyCardDatabase, detection.initDetector, formatInitError, modelPreference]);
 
   useEffect(() => {
     initializeApp();
@@ -467,6 +467,12 @@ export default function App() {
   useEffect(() => {
     refreshPriceCache();
   }, [refreshPriceCache]);
+
+  const getLocalCardIds = useCallback(() => getMatcher().cards
+    .map((card) => String(card.id || '').trim())
+    .filter(Boolean), []);
+  const newPrints = useNewPrintCheck({ ready: !isLoading && !initError, getKnownIds: getLocalCardIds });
+  const refreshNewPrints = newPrints.refresh;
 
   const handleUpdateCardDatabase = useCallback(async () => {
     if (cardDatabaseBusy) {
@@ -477,18 +483,16 @@ export default function App() {
       setCardDatabaseBusy(true);
       setUpdateTask({
         title: 'Updating card database',
-        detail: 'Checking the Riot gallery for missing cards...',
+        detail: 'Checking the Riot gallery for new and changed cards...',
         progress: 0.02,
       });
       await yieldToPaint();
 
       try {
         const matcher = getMatcher();
-        const existingCardIds = [...new Set(
-          matcher.cards
-            .map((card) => String(card.id || '').trim())
-            .filter(Boolean)
-        )];
+        const knownCards = matcher.cards
+          .map((card) => ({ id: String(card.id || '').trim(), sourceImageUrl: sourceImageUrlOf(card) }))
+          .filter((card) => card.id);
         const unlisten = await listen(CARD_DATABASE_PROGRESS_EVENT, (event) => {
           const progress = event.payload || {};
           const percent = Number(progress.percent);
@@ -506,13 +510,13 @@ export default function App() {
 
         let text;
         try {
-          text = await invokeDesktopCommand('update_card_database', { existingCardIds });
+          text = await invokeDesktopCommand('update_card_database', { knownCards, gridSize: matcher.gridSize });
         } finally {
           unlisten();
         }
 
         const updateDatabase = JSON.parse(text);
-        const mergedDatabase = mergeCardDatabases(
+        const mergedDatabase = mergeCardDatabaseUpdate(
           { gridSize: matcher.gridSize, cards: matcher.cards },
           updateDatabase
         );
@@ -530,7 +534,8 @@ export default function App() {
           detail: 'Refreshing local set filters...',
           progress: 0.98,
         });
-        setScanSetOptions(buildScanSetOptions(getMatcher().cards));
+        applyCardDatabase(getMatcher().cards);
+        refreshNewPrints();
         setUpdateTask({
           title: 'Updating card database',
           detail: 'Card database update complete.',
@@ -549,7 +554,7 @@ export default function App() {
     }
 
     cardDatabaseInputRef.current?.click();
-  }, [cardDatabaseBusy, processCardDatabase, showNotification, yieldToPaint]);
+  }, [applyCardDatabase, cardDatabaseBusy, processCardDatabase, refreshNewPrints, showNotification, yieldToPaint]);
 
   const handleImportCardDatabase = useCallback(() => {
     cardDatabaseInputRef.current?.click();
@@ -563,12 +568,12 @@ export default function App() {
     try {
       const text = await file.text();
       await processCardDatabaseText(text);
-      setScanSetOptions(buildScanSetOptions(getMatcher().cards));
+      applyCardDatabase(getMatcher().cards);
     } catch (error) {
       console.error('[App] Card database import error:', error);
       showNotification(`Card database update failed: ${error.message}`, 'error');
     }
-  }, [processCardDatabaseText, showNotification]);
+  }, [applyCardDatabase, processCardDatabaseText, showNotification]);
 
   const handleImportPriceSnapshot = useCallback(async () => {
     if (priceSyncBusy) {
@@ -876,7 +881,7 @@ export default function App() {
       cardData: entry.cardData,
       priceRecord: priceByCardId.get(entry.cardData.id) || null,
     });
-    showNotification('+ ' + entry.cardData.name + (entry.quantity > 1 ? ' x' + entry.quantity : ''), 'success');
+    showNotification('+ ' + fullNameOf(entry.cardData) + (entry.quantity > 1 ? ' x' + entry.quantity : ''), 'success');
     navigator.vibrate?.(50);
   }, [priceByCardId, recordRecentPendingScan, showNotification]);
 
@@ -995,15 +1000,16 @@ export default function App() {
     // Fake and debug scans never reach the pending list or learned references.
     if (!card?.id || debugEnabled || autoScan.fakeScanEnabled) return false;
     if (isDuplicateAdd(lastAddRef.current, card.id, Date.now())) {
-      showNotification(card.name + ' was just added', 'info');
+      showNotification(fullNameOf(card) + ' was just added', 'info');
       return false;
     }
     lastAddRef.current = { cardId: card.id, at: Date.now() };
     const entry = createUserConfirmedEntry(scan, card, { from, rank }, batchDefaultsRef.current);
+    const learnedReferenceId = onUserConfirmed({ entry, card: entry.cardData, from, rank, artwork: getScanArtwork(scan) || null });
+    entry.learnedReferenceIds = learnedReferenceId ? [learnedReferenceId] : [];
     queuePendingEntry(entry);
     scanSound.playScanAccepted();
     autoScan.setLastCardId(card.id);
-    onUserConfirmed({ entry, card: entry.cardData, from, rank, artwork: getScanArtwork(scan) || null });
     return true;
   }, [queuePendingEntry, scanSound.playScanAccepted, autoScan, debugEnabled, showNotification]);
 
@@ -1019,7 +1025,7 @@ export default function App() {
     mergeCardsIntoCollection([card]);
     setPendingCards((prev) => prev.filter((entry) => entry.entryId !== entryId));
     setRecentPendingScanEvents((prev) => prev.filter((event) => !matchesPendingScan(event, card)));
-    showNotification(card.cardData.name + ' added to collection', 'success');
+    showNotification(fullNameOf(card.cardData) + ' added to collection', 'success');
   }, [mergeCardsIntoCollection, pendingCards, showNotification]);
 
   const handleConfirmAllPending = useCallback(() => {
@@ -1034,6 +1040,7 @@ export default function App() {
     const card = pendingCards.find((entry) => entry.entryId === entryId);
     setPendingCards((prev) => prev.filter((entry) => entry.entryId !== entryId));
     if (card) setRecentPendingScanEvents((prev) => prev.filter((event) => !matchesPendingScan(event, card)));
+    forgetLearnedReferences(card?.learnedReferenceIds);
   }, [pendingCards]);
 
   const handleAdjustPendingQuantity = useCallback((entryId, delta) => {
@@ -1043,12 +1050,17 @@ export default function App() {
       handleRemovePending(entryId);
       return;
     }
+    // Lowering the quantity undoes the most recent user-confirmed scans first.
+    const ids = card.learnedReferenceIds || [];
+    const kept = delta < 0 ? ids.slice(0, Math.max(0, ids.length + delta)) : ids;
+    forgetLearnedReferences(ids.slice(kept.length));
     setPendingCards((prev) => prev.map((entry) => entry.entryId === entryId
-      ? { ...entry, quantity: Math.max(1, entry.quantity + delta) }
+      ? { ...entry, quantity: Math.max(1, entry.quantity + delta), ...(kept !== ids ? { learnedReferenceIds: kept } : {}) }
       : entry));
     if (delta > 0) recordRecentPendingScan(card, Date.now());
   }, [handleRemovePending, pendingCards, recordRecentPendingScan]);
 
+  // Clearing is not undoing: learned references saved by these rows stay.
   const handleClearPending = useCallback(() => {
     setPendingCards([]);
     setRecentPendingScanEvents([]);
@@ -1088,7 +1100,7 @@ export default function App() {
   const handleAddCardToExport = useCallback((payload) => {
     const entry = createCardEntry(payload, batchDefaultsRef.current);
     mergeCardsIntoCollection([entry]);
-    showNotification('+ ' + entry.cardData.name, 'success');
+    showNotification('+ ' + fullNameOf(entry.cardData), 'success');
   }, [mergeCardsIntoCollection, showNotification]);
 
   const handleAddCardsToExport = useCallback((payloads) => {
@@ -1107,11 +1119,16 @@ export default function App() {
     const result = downloadCSV(scannedCards, null, exportFormat);
     if (result.success) {
       showNotification(
-        `CSV downloaded: ${result.filename} (${result.format}, ${scannedCards.length} cards)`,
+        `Downloaded: ${result.filename} (${result.format}, ${scannedCards.length} cards)${result.notice ? ` · ${result.notice}` : ''}`,
         'success'
       );
     }
   }, [scannedCards, showNotification, exportFormat]);
+
+  const handleCopyDeckList = useCallback(async () => {
+    const result = await copyDeckList(scannedCards);
+    showNotification(result.message, result.success ? 'success' : 'error');
+  }, [scannedCards, showNotification]);
 
   // ─── Render ────────────────────────────────────────────────
   const cardDatabaseInput = (
@@ -1160,6 +1177,9 @@ export default function App() {
           confirmCandidate(candidateSearch.scan, card, { from: candidateSearch.from, rank: null });
           setCandidateSearch(null);
         }} />}
+
+      <NewPrintNotice count={newPrints.count} onUpdate={handleUpdateCardDatabase} onLater={newPrints.later}
+        disabled={priceSyncBusy || cardDatabaseBusy || appUpdateBusy} />
 
       {/* Tab content */}
       <div className="flex-1 flex flex-col min-h-0">
@@ -1217,6 +1237,8 @@ export default function App() {
             onSplitCard={handleSplitCardVariant}
             onClearAll={handleClearAll}
             onExport={handleExport}
+            exportFormat={exportFormat}
+            onCopyDeckList={handleCopyDeckList}
             priceByCardId={priceByCardId}
             priceCurrency={priceCurrency}
             priceExchangeRates={priceExchangeRates}

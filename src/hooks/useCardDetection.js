@@ -6,6 +6,8 @@ import { recognizeCard, buildRecognitionResult, applyTextVerification, rankForRe
 import { hasLocalArtworkSupport } from '../lib/localArtwork.js';
 import { selectGuideDetection, mapDetectionBox } from '../lib/scanGeometry.js';
 import { attachScanEvidence, attachScanArtwork } from '../lib/scanEvidence.js';
+import { describeScanArtwork, getLearnedReferences } from '../lib/learnedReferences.js';
+import { mergeLearnedCandidates } from '../lib/learnedCandidates.js';
 import { emitScanDiagnostic } from '../lib/scanDiagnostics.js';
 import { isScanFrameCancelled } from '../lib/scanQuality.js';
 import { CardVisualVerifier } from '../lib/cardVisualVerifier.js';
@@ -89,6 +91,9 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
   /**
    * Detect cards in a single frame (tap to scan).
    * Captures one frame, runs YOLO + matching, returns result.
+   * `offerCandidates`: the frame's candidates are offered to the user (Choice
+   * strip), so learned references are merged into them. Snap review
+   * (`includeReview`) always offers them.
    */
   const detectSingleFrame = useCallback(async (captureFrame, options = {}) => {
     if (busyRef.current || !detectorRef.current || detectorRef.current.state !== DetectorState.READY) return null;
@@ -154,12 +159,23 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
       if (isScanFrameCancelled(frame) || epoch !== epochRef.current || matcher.revision !== matcherRevision) return null;
       const quality = recognition.quality;
       if (frame.scanMoving) { quality.acceptable = false; quality.issue = 'moving'; }
+      // The candidates shown to the user (Choice strip, Snap review), with
+      // learned references merged in when this frame offers candidates. Set
+      // after acceptance, which never sees them.
+      const showCandidates = (result, officialCandidates) => {
+        const artwork = describeScanArtwork({ crop: recognition.crop, quality, matcher,
+          outlined: !bestDetection.detectorProposal, areaSampling: recognition.artworkSampling === 'area' });
+        result.reviewCandidates = options.offerCandidates || options.includeReview
+          ? mergeLearnedCandidates(officialCandidates, { artwork, matcher,
+            references: getLearnedReferences().references(), setFilter: scanSetFilterRef.current })
+          : officialCandidates;
+        attachScanArtwork(result, artwork);
+      };
       // Snap review still gets an outlined card that failed quality or matched
       // nothing; its candidates are ranked for review, never for acceptance.
       const withReviewCandidates = (result, rankCandidates) => {
         if (!options.includeReview) return null;
-        result.reviewCandidates = rankCandidates();
-        attachScanArtwork(result, { crop: recognition.crop, quality });
+        showCandidates(result, rankCandidates());
         return result;
       };
       if (!quality.acceptable) {
@@ -217,8 +233,7 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
           localStructureSimilarity: entry.localStructureSimilarity, alignedArtworkSimilarity: entry.alignedArtworkSimilarity,
           artworkAlignment: entry.artworkAlignment, similarityGap: entry.similarity - (entry.secondBestSim ?? 0),
         })) });
-      result.reviewCandidates = reviewCandidatesFor(matchResult);
-      attachScanArtwork(result, { crop: recognition.crop, quality });
+      showCandidates(result, reviewCandidatesFor(matchResult));
       publish(result);
       if (result.matched || options.includeReview || (options.includeCandidate && (matchResult.similarity >= CANDIDATE_SIMILARITY_FLOOR || hasLocalArtworkSupport(matchResult)))) return result;
       return null;
