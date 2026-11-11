@@ -36,7 +36,7 @@ export function recentPendingRows({ rows, recentScans }) {
   if (recentScans.length > 0) {
     return recentScans.slice(-RECENT_ROWS_SHOWN).reverse()
       .map((scan) => {
-        const row = rows.find((candidate) => matchesRecentScan(scan, candidate));
+        const row = rows.find((other) => matchesRecentScan(scan, other));
         return row ? { ...row, recentScanTimestamp: scan.scanTimestamp } : null;
       })
       .filter(Boolean);
@@ -50,10 +50,10 @@ const withRecentScan = (recentScans, row, scanTimestamp) => [...recentScans,
 
 const withoutRecentScansOf = (recentScans, row) => recentScans.filter((scan) => !matchesRecentScan(scan, row));
 
-const result = (list, { outcome = null, added = null, forget = [], toCollection = [] } = {}) =>
-  ({ list, outcome, effects: { added, forget, toCollection } });
+const step = (list, { outcome = null, added = null, forgetLearnedReferences = [], toCollection = [] } = {}) =>
+  ({ list, outcome, effects: { added, forgetLearnedReferences, toCollection } });
 
-function add(list, entry) {
+function addRow(list, entry) {
   return { ...list, rows: mergeCardEntries(list.rows, [entry]),
     recentScans: withRecentScan(list.recentScans, entry, entry.scanTimestamp) };
 }
@@ -61,13 +61,13 @@ function add(list, entry) {
 // A scan, by the scanner or by the user, is dropped when the same card was
 // added a moment ago. Only an add starts the window.
 function addScan(list, entry, now) {
-  if (isDuplicateAdd(list, entry.cardData.id, now)) return result(list, { outcome: 'duplicate' });
-  return result({ ...add(list, entry), lastAdd: { cardId: entry.cardData.id, at: now } }, { outcome: 'added', added: entry });
+  if (isDuplicateAdd(list, entry.cardData.id, now)) return step(list, { outcome: 'duplicate' });
+  return step({ ...addRow(list, entry), lastAdd: { cardId: entry.cardData.id, at: now } }, { outcome: 'added', added: entry });
 }
 
 function removeRow(list, row) {
-  return result({ ...list, rows: list.rows.filter((candidate) => candidate !== row),
-    recentScans: withoutRecentScansOf(list.recentScans, row) }, { forget: row.learnedReferenceIds || [] });
+  return step({ ...list, rows: list.rows.filter((other) => other !== row),
+    recentScans: withoutRecentScansOf(list.recentScans, row) }, { forgetLearnedReferences: row.learnedReferenceIds || [] });
 }
 
 function adjustQuantity(list, row, delta, now) {
@@ -76,22 +76,22 @@ function adjustQuantity(list, row, delta, now) {
   const ids = row.learnedReferenceIds || [];
   const kept = delta < 0 ? ids.slice(0, Math.max(0, ids.length + delta)) : ids;
   const adjusted = { ...row, quantity: Math.max(1, row.quantity + delta), ...(delta < 0 ? { learnedReferenceIds: kept } : {}) };
-  return result({ ...list, rows: list.rows.map((candidate) => candidate === row ? adjusted : candidate),
-    recentScans: delta > 0 ? withRecentScan(list.recentScans, row, now) : list.recentScans }, { forget: ids.slice(kept.length) });
+  return step({ ...list, rows: list.rows.map((other) => other === row ? adjusted : other),
+    recentScans: delta > 0 ? withRecentScan(list.recentScans, row, now) : list.recentScans }, { forgetLearnedReferences: ids.slice(kept.length) });
 }
 
 // Moving rows to the collection is not undoing: their learned references stay.
 function moveToCollection(list, rows) {
-  if (rows.length === 0) return result(list);
-  return result({ ...list, rows: list.rows.filter((row) => !rows.includes(row)),
+  if (rows.length === 0) return step(list);
+  return step({ ...list, rows: list.rows.filter((row) => !rows.includes(row)),
     recentScans: rows.reduce(withoutRecentScansOf, list.recentScans) }, { toCollection: rows });
 }
 
 /**
  * Applies one event to the pending list and returns
- * { list, outcome, effects: { added, forget, toCollection } }.
+ * { list, outcome, effects: { added, forgetLearnedReferences, toCollection } }.
  *
- * Events, each with `now`:
+ * Events. The two scans and quantity-adjusted also carry `now`:
  *   accepted-scan        { entry }                     the scanner accepted a card
  *   user-confirmed-scan  { entry, learnedReferenceId } the user picked the card; the id of the
  *                                                      learned reference that scan saved, or null
@@ -102,10 +102,10 @@ function moveToCollection(list, rows) {
  *   cleared              {}
  *   moved-to-collection  { entryIds } or { all: true }
  *
- * `outcome` is 'added' or 'duplicate' for the two scans and for added-by-hand,
- * otherwise null. `effects.added` is the entry to announce, `effects.forget`
- * the learned references to delete, `effects.toCollection` the rows to add to
- * the collection.
+ * `outcome` is 'added' or 'duplicate' for the two scans, 'added' for
+ * added-by-hand, otherwise null. `effects.added` is the entry to announce,
+ * `effects.forgetLearnedReferences` the ids of the learned references to
+ * delete, `effects.toCollection` the rows to add to the collection.
  */
 export function updatePendingList(list, event) {
   const rowOf = (entryId) => list.rows.find((row) => row.entryId === entryId);
@@ -115,24 +115,24 @@ export function updatePendingList(list, event) {
     case 'user-confirmed-scan':
       return addScan(list, { ...event.entry, learnedReferenceIds: event.learnedReferenceId ? [event.learnedReferenceId] : [] }, event.now);
     case 'added-by-hand':
-      return result(add(list, event.entry), { outcome: 'added', added: event.entry });
+      return step(addRow(list, event.entry), { outcome: 'added', added: event.entry });
     case 'row-edited':
-      return result({ ...list, rows: list.rows.map((row) => row.entryId === event.entryId
+      return step({ ...list, rows: list.rows.map((row) => row.entryId === event.entryId
         ? createCardEntry({ ...row, ...event.patch, entryId: row.entryId }) : row) });
     case 'quantity-adjusted': {
       const row = rowOf(event.entryId);
-      return row && event.delta !== 0 ? adjustQuantity(list, row, event.delta, event.now) : result(list);
+      return row && event.delta !== 0 ? adjustQuantity(list, row, event.delta, event.now) : step(list);
     }
     case 'row-removed': {
       const row = rowOf(event.entryId);
-      return row ? removeRow(list, row) : result(list);
+      return row ? removeRow(list, row) : step(list);
     }
     case 'cleared':
       // Clearing is not undoing: learned references saved by these rows stay.
-      return result({ ...list, rows: [], recentScans: [] });
+      return step({ ...list, rows: [], recentScans: [] });
     case 'moved-to-collection':
       return moveToCollection(list, event.all ? list.rows : event.entryIds.map(rowOf).filter(Boolean));
     default:
-      return result(list);
+      return step(list);
   }
 }

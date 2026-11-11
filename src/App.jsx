@@ -870,12 +870,12 @@ export default function App() {
   // Every change to the pending list goes through here: apply the event, then
   // do what it asks for.
   const dispatchPending = useCallback((event) => {
-    const result = updatePendingList(pendingListRef.current, { now: Date.now(), ...event });
-    replacePendingList(result.list);
+    const update = updatePendingList(pendingListRef.current, { now: Date.now(), ...event });
+    replacePendingList(update.list);
     // Undoing a wrong pick: its user-confirmed scans must not teach the matcher.
-    for (const id of result.effects.forget) getLearnedReferences().remove(id);
-    if (result.effects.toCollection.length > 0) mergeCardsIntoCollection(result.effects.toCollection);
-    return result;
+    for (const id of update.effects.forgetLearnedReferences) getLearnedReferences().remove(id);
+    if (update.effects.toCollection.length > 0) mergeCardsIntoCollection(update.effects.toCollection);
+    return update;
   }, [mergeCardsIntoCollection, replacePendingList]);
 
   const announcePendingEntry = useCallback((entry) => {
@@ -898,8 +898,9 @@ export default function App() {
       scanTimestamp: result.timestamp,
     }, batchDefaultsRef.current);
     // Handled, not added: auto scan locks the card instead of retrying.
-    if (dispatchPending({ type: 'accepted-scan', entry }).outcome === 'duplicate') return true;
-    announcePendingEntry(entry);
+    const { outcome, effects } = dispatchPending({ type: 'accepted-scan', entry });
+    if (outcome === 'duplicate') return true;
+    announcePendingEntry(effects.added);
     scanSound.playScanAccepted();
     emitScanDiagnostic('queued',{result});
     return true;
@@ -914,8 +915,7 @@ export default function App() {
       similarity: 1,
       manualAdded: true,
     }, batchDefaultsRef.current);
-    dispatchPending({ type: 'added-by-hand', entry });
-    announcePendingEntry(entry);
+    announcePendingEntry(dispatchPending({ type: 'added-by-hand', entry }).effects.added);
   }, [dispatchPending, announcePendingEntry]);
 
   const captureAcceptedDebugScan = useCallback(result => {

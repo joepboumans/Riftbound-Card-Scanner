@@ -23,7 +23,7 @@ test('an accepted scan adds a pending row and reports the entry it added', () =>
   assert.equal(list.rows.length, 1);
   assert.equal(list.rows[0].cardData.id, card.id);
   assert.equal(effects.added, event.entry);
-  assert.deepEqual(effects.forget, []);
+  assert.deepEqual(effects.forgetLearnedReferences, []);
   assert.deepEqual(effects.toCollection, []);
 });
 
@@ -89,7 +89,7 @@ test('removing a pending row forgets all of its learned references', () => {
   const list = mergedRow();
   const { list: after, effects } = updatePendingList(list, { type: 'row-removed', entryId: list.rows[0].entryId, now: 8000 });
   assert.equal(after.rows.length, 0);
-  assert.deepEqual(effects.forget, ['learned-1', 'learned-2']);
+  assert.deepEqual(effects.forgetLearnedReferences, ['learned-1', 'learned-2']);
   assert.deepEqual(recentPendingRows(after), []);
 });
 
@@ -97,12 +97,12 @@ test('lowering a row forgets its most recent learned references first; lowering 
   const list = mergedRow();
   const entryId = list.rows[0].entryId;
   const lowered = updatePendingList(list, { type: 'quantity-adjusted', entryId, delta: -1, now: 8000 });
-  assert.deepEqual(lowered.effects.forget, ['learned-2']);
+  assert.deepEqual(lowered.effects.forgetLearnedReferences, ['learned-2']);
   assert.equal(lowered.list.rows[0].quantity, 2);
   assert.deepEqual(lowered.list.rows[0].learnedReferenceIds, ['learned-1']);
   const removed = updatePendingList(lowered.list, { type: 'quantity-adjusted', entryId, delta: -2, now: 9000 });
   assert.equal(removed.list.rows.length, 0);
-  assert.deepEqual(removed.effects.forget, ['learned-1']);
+  assert.deepEqual(removed.effects.forgetLearnedReferences, ['learned-1']);
 });
 
 test('raising a row keeps its learned references and counts as its most recent scan', () => {
@@ -110,7 +110,7 @@ test('raising a row keeps its learned references and counts as its most recent s
   const raised = updatePendingList(list, { type: 'quantity-adjusted', entryId: list.rows[0].entryId, delta: 2, now: 9000 });
   assert.equal(raised.list.rows[0].quantity, 3);
   assert.deepEqual(raised.list.rows[0].learnedReferenceIds, ['learned-1']);
-  assert.deepEqual(raised.effects.forget, []);
+  assert.deepEqual(raised.effects.forgetLearnedReferences, []);
   const [latest] = recentPendingRows(raised.list);
   assert.equal(latest.cardData.id, card.id);
   assert.equal(latest.recentScanTimestamp, 9000);
@@ -126,7 +126,7 @@ test('clearing the pending list keeps the learned references its rows saved', ()
   const { list, effects } = updatePendingList(mergedRow(), { type: 'cleared', now: 8000 });
   assert.equal(list.rows.length, 0);
   assert.deepEqual(recentPendingRows(list), []);
-  assert.deepEqual(effects.forget, [], 'clearing is not undoing a wrong pick');
+  assert.deepEqual(effects.forgetLearnedReferences, [], 'clearing is not undoing a wrong pick');
 });
 
 test('moving one row to the collection hands it over whole, keeps the others and forgets nothing', () => {
@@ -136,7 +136,7 @@ test('moving one row to the collection hands it over whole, keeps the others and
   const moved = updatePendingList(list, { type: 'moved-to-collection', entryIds: [standard.entryId, picked.entryId], now: 2000 });
   assert.deepEqual(moved.effects.toCollection, [standard, picked]);
   assert.deepEqual(moved.list.rows, [foil]);
-  assert.deepEqual(moved.effects.forget, []);
+  assert.deepEqual(moved.effects.forgetLearnedReferences, []);
   assert.equal(updatePendingList(list, { type: 'moved-to-collection', entryIds: ['missing'], now: 1 }).list, list);
 });
 
@@ -179,4 +179,31 @@ test('a restored pending list gets row ids, and a card database refresh updates 
   assert.equal(refreshed.rows[0].cardData.name, card.name);
   assert.equal(refreshed.rows[0].quantity, 2);
   assert.equal(refreshed.rows[0].entryId, list.rows[0].entryId);
+});
+
+test('only the twelve most recent scans are remembered', () => {
+  const list = run(createPendingList(), ...Array.from({ length: 14 }, (_, index) => accepted(10000 * (index + 1)))).list;
+  assert.equal(list.recentScans.length, 12);
+  assert.equal(list.rows[0].quantity, 14);
+});
+
+test('a recent scan saved with a row id follows that row', () => {
+  const rows = [entryOf(card, { foil: false }), entryOf(card, { foil: true })];
+  const list = createPendingList({ rows, recentScans: [{ entryId: rows[1].entryId, cardId: card.id, scanTimestamp: 7 }] });
+  assert.equal(recentPendingRows(list)[0].entryId, rows[1].entryId);
+});
+
+test('removing an unknown row changes nothing', () => {
+  const list = mergedRow();
+  const { list: after, effects } = updatePendingList(list, { type: 'row-removed', entryId: 'missing' });
+  assert.equal(after, list);
+  assert.deepEqual(effects.forgetLearnedReferences, []);
+});
+
+test('lowering a row by more copies than it has learned references forgets them all and keeps the row', () => {
+  const list = run(createPendingList(), byHand(card, { quantity: 4 }), confirmed(1000, 'learned-1')).list;
+  const lowered = updatePendingList(list, { type: 'quantity-adjusted', entryId: list.rows[0].entryId, delta: -3, now: 2000 });
+  assert.equal(lowered.list.rows[0].quantity, 2);
+  assert.deepEqual(lowered.list.rows[0].learnedReferenceIds, []);
+  assert.deepEqual(lowered.effects.forgetLearnedReferences, ['learned-1']);
 });
