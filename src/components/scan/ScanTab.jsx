@@ -14,7 +14,8 @@ import { downloadCSV, copyDeckList, exportFileType, validateForExport, EXPORT_FO
 import { formatPrice, getPriceValue as getRecordPriceValue } from '../../lib/priceFormat.js';
 import { isFoilOnly } from '../../data/sampleCards.js';
 import { compareByFullName, fullNameOf, resolveCardData } from '../../lib/cardData.js';
-import { createCardEntry, matchesPendingScan } from '../../lib/collection.js';
+import { createCardEntry } from '../../lib/collection.js';
+import { recentPendingRows } from '../../lib/pendingList.js';
 import { getSelectedDetectionEntries } from '../../lib/scanEntries.js';
 import { searchCards } from '../../lib/cardSearch.js';
 
@@ -165,28 +166,8 @@ export default function ScanTab({
   }, 0);
   const totalPendingValueLabel = formatPrice(totalPendingValue, priceCurrency, priceExchangeRates) || (priceCurrency === 'USD' ? '$0.00' : '€0.00');
 
-  const recentPendingCards = useMemo(() => {
-    if (recentPendingScanEvents.length > 0) {
-      return recentPendingScanEvents
-        .slice(-3)
-        .reverse()
-        .map((event) => {
-          const card = pendingCards.find((entry) => matchesPendingScan(event, entry));
-          if (!card) return null;
-          return {
-            ...card,
-            recentScanTimestamp: event.scanTimestamp,
-          };
-        })
-        .filter(Boolean)
-        .slice(0, 3);
-    }
-
-    return [...pendingCards]
-      .filter((card) => !card.manualAdded)
-      .slice(-3)
-      .reverse();
-  }, [pendingCards, recentPendingScanEvents]);
+  const recentPendingCards = useMemo(() => recentPendingRows({ rows: pendingCards, recentScans: recentPendingScanEvents }),
+    [pendingCards, recentPendingScanEvents]);
 
   const manualCardResults = useMemo(() => {
     const matcher = getMatcher();

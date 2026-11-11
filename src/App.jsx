@@ -29,11 +29,12 @@ import { FALLBACK_EXCHANGE_RATE_DATE, normalizeExchangeRates, normalizePriceCurr
 import { isFoilOnly } from './data/sampleCards.js';
 import { normalizeCameraProfile } from './lib/cameraControls.js';
 import { isReliableScanResult } from './lib/scanQuality.js';
-import { createUserConfirmedEntry, onUserConfirmed, isDuplicateAdd } from './lib/userConfirmation.js';
+import { createUserConfirmedEntry, onUserConfirmed } from './lib/userConfirmation.js';
 import { getLearnedReferences } from './lib/learnedReferences.js';
 import { getScanArtwork } from './lib/scanEvidence.js';
 import { fullNameOf } from './lib/cardData.js';
-import { createCardEntry, createEntryId, restoreCardEntries, getCardVariantKey, mergeCardEntries, matchesPendingScan } from './lib/collection.js';
+import { createCardEntry, createEntryId, restoreCardEntries, mergeCardEntries } from './lib/collection.js';
+import { createPendingList, updatePendingList, refreshPendingList, isDuplicateAdd } from './lib/pendingList.js';
 import { persistUserSnapshot } from './lib/userStorage.js';
 import { SCAN_SOUND_STORAGE_KEY } from './lib/scanSound.js';
 import { CardRectifier } from './lib/cardRectifier.js';
@@ -89,11 +90,6 @@ function loadFromStorage(key, fallback) {
   }
 }
 
-// Undoing a wrong pick: its user-confirmed scans must not teach the matcher.
-function forgetLearnedReferences(ids = []) {
-  for (const id of ids) getLearnedReferences().remove(id);
-}
-
 export default function App() {
   // ─── App State ─────────────────────────────────────────────
   const [isLoading, setIsLoading] = useState(true);
@@ -104,12 +100,18 @@ export default function App() {
   const [runtimeInfo, setRuntimeInfo] = useState(null);
 
   // Scanning
-  const [pendingCards, setPendingCards] = useState(() =>
-    restoreCardEntries(loadFromStorage(STORAGE_KEYS.PENDING_CARDS, []))
-  );
-  const [recentPendingScanEvents, setRecentPendingScanEvents] = useState(() =>
-    loadFromStorage(STORAGE_KEYS.RECENT_PENDING_SCAN_EVENTS, [])
-  );
+  const [pendingList, setPendingList] = useState(() => createPendingList({
+    rows: loadFromStorage(STORAGE_KEYS.PENDING_CARDS, []),
+    recentScans: loadFromStorage(STORAGE_KEYS.RECENT_PENDING_SCAN_EVENTS, []),
+  }));
+  // The latest pending list, for handlers that run more than once between renders.
+  const pendingListRef = useRef(pendingList);
+  const replacePendingList = useCallback((list) => {
+    pendingListRef.current = list;
+    setPendingList(list);
+  }, []);
+  const pendingCards = pendingList.rows;
+  const recentPendingScanEvents = pendingList.recentScans;
   const [scannedCards, setScannedCards] = useState(() =>
     restoreCardEntries(loadFromStorage(STORAGE_KEYS.SCANNED_CARDS, []))
   );
@@ -161,9 +163,9 @@ export default function App() {
   // Each card database load also refreshes saved entries' card data by id.
   const applyCardDatabase = useCallback((cards) => {
     setScanSetOptions(buildScanSetOptions(cards));
-    setPendingCards((entries) => restoreCardEntries(entries, cards));
+    replacePendingList(refreshPendingList(pendingListRef.current, cards));
     setScannedCards((entries) => restoreCardEntries(entries, cards));
-  }, []);
+  }, [replacePendingList]);
 
   const [priceSyncBusy, setPriceSyncBusy] = useState(false);
   const [cardDatabaseBusy, setCardDatabaseBusy] = useState(false);
@@ -861,21 +863,22 @@ export default function App() {
     return isReliableScanResult(result, scanMatching.minSimilarity);
   }, [scanMatching.minSimilarity]);
 
-  const recordRecentPendingScan = useCallback((entry, timestamp) => {
-    setRecentPendingScanEvents((prev) => [...prev, {
-      cardId: entry.cardData.id,
-      variantKey: getCardVariantKey(entry),
-      scanTimestamp: timestamp,
-    }].slice(-12));
-  }, []);
-
   const mergeCardsIntoCollection = useCallback((cardsToAdd) => {
     setScannedCards((prev) => mergeCardEntries(prev, cardsToAdd));
   }, []);
 
-  const queuePendingEntry = useCallback((entry) => {
-    setPendingCards((prev) => mergeCardEntries(prev, [entry]));
-    recordRecentPendingScan(entry, entry.scanTimestamp);
+  // Every change to the pending list goes through here: apply the event, then
+  // do what it asks for.
+  const dispatchPending = useCallback((event) => {
+    const result = updatePendingList(pendingListRef.current, { now: Date.now(), ...event });
+    replacePendingList(result.list);
+    // Undoing a wrong pick: its user-confirmed scans must not teach the matcher.
+    for (const id of result.effects.forget) getLearnedReferences().remove(id);
+    if (result.effects.toCollection.length > 0) mergeCardsIntoCollection(result.effects.toCollection);
+    return result;
+  }, [mergeCardsIntoCollection, replacePendingList]);
+
+  const announcePendingEntry = useCallback((entry) => {
     setScanAddAnimation({
       key: entry.entryId,
       cardData: entry.cardData,
@@ -883,39 +886,37 @@ export default function App() {
     });
     showNotification('+ ' + fullNameOf(entry.cardData) + (entry.quantity > 1 ? ' x' + entry.quantity : ''), 'success');
     navigator.vibrate?.(50);
-  }, [priceByCardId, recordRecentPendingScan, showNotification]);
-
-  // The last card added by the scanner or by a pick, to drop the same card
-  // added again by the other path a moment later.
-  const lastAddRef = useRef(null);
+  }, [priceByCardId, showNotification]);
 
   const handleCardDetected = useCallback((result) => {
     if (result?.acceptedByFakeScan) return false;
     if (!result?.cardData?.id || !passesScanThreshold(result)) return false;
-    // Handled, not added: auto scan locks the card instead of retrying.
-    if (isDuplicateAdd(lastAddRef.current, result.cardData.id, Date.now())) return true;
-    lastAddRef.current = { cardId: result.cardData.id, at: Date.now() };
-    queuePendingEntry(createCardEntry({
+    const entry = createCardEntry({
       cardData: result.cardData,
       confidence: result.confidence,
       similarity: result.similarity,
       scanTimestamp: result.timestamp,
-    }, batchDefaultsRef.current));
+    }, batchDefaultsRef.current);
+    // Handled, not added: auto scan locks the card instead of retrying.
+    if (dispatchPending({ type: 'accepted-scan', entry }).outcome === 'duplicate') return true;
+    announcePendingEntry(entry);
     scanSound.playScanAccepted();
     emitScanDiagnostic('queued',{result});
     return true;
-  }, [passesScanThreshold, queuePendingEntry, scanSound.playScanAccepted]);
+  }, [passesScanThreshold, dispatchPending, announcePendingEntry, scanSound.playScanAccepted]);
 
   const handleAddPendingCard = useCallback((cardData, options = {}) => {
     if (!cardData) return;
-    queuePendingEntry(createCardEntry({
+    const entry = createCardEntry({
       cardData,
       ...options,
       confidence: 1,
       similarity: 1,
       manualAdded: true,
-    }, batchDefaultsRef.current));
-  }, [queuePendingEntry]);
+    }, batchDefaultsRef.current);
+    dispatchPending({ type: 'added-by-hand', entry });
+    announcePendingEntry(entry);
+  }, [dispatchPending, announcePendingEntry]);
 
   const captureAcceptedDebugScan = useCallback(result => {
     if(!SCANNER_DIAGNOSTICS_AVAILABLE)return;
@@ -999,72 +1000,46 @@ export default function App() {
   const confirmCandidate = useCallback((scan, card, { from, rank = null }) => {
     // Fake and debug scans never reach the pending list or learned references.
     if (!card?.id || debugEnabled || autoScan.fakeScanEnabled) return false;
-    if (isDuplicateAdd(lastAddRef.current, card.id, Date.now())) {
+    const now = Date.now();
+    // Checked before the scan is handed to learned references, so a duplicate saves nothing.
+    if (isDuplicateAdd(pendingListRef.current, card.id, now)) {
       showNotification(fullNameOf(card) + ' was just added', 'info');
       return false;
     }
-    lastAddRef.current = { cardId: card.id, at: Date.now() };
     const entry = createUserConfirmedEntry(scan, card, { from, rank }, batchDefaultsRef.current);
     const learnedReferenceId = onUserConfirmed({ entry, card: entry.cardData, from, rank, artwork: getScanArtwork(scan) || null });
-    entry.learnedReferenceIds = learnedReferenceId ? [learnedReferenceId] : [];
-    queuePendingEntry(entry);
+    const { effects } = dispatchPending({ type: 'user-confirmed-scan', entry, learnedReferenceId, now });
+    announcePendingEntry(effects.added);
     scanSound.playScanAccepted();
     autoScan.setLastCardId(card.id);
     return true;
-  }, [queuePendingEntry, scanSound.playScanAccepted, autoScan, debugEnabled, showNotification]);
+  }, [dispatchPending, announcePendingEntry, scanSound.playScanAccepted, autoScan, debugEnabled, showNotification]);
 
   const handleUpdatePendingCard = useCallback((entryId, patch) => {
-    setPendingCards((prev) => prev.map((entry) => entry.entryId === entryId
-      ? createCardEntry({ ...entry, ...patch, entryId: entry.entryId })
-      : entry));
-  }, []);
+    dispatchPending({ type: 'row-edited', entryId, patch });
+  }, [dispatchPending]);
 
   const handleConfirmPending = useCallback((entryId) => {
-    const card = pendingCards.find((entry) => entry.entryId === entryId);
-    if (!card) return;
-    mergeCardsIntoCollection([card]);
-    setPendingCards((prev) => prev.filter((entry) => entry.entryId !== entryId));
-    setRecentPendingScanEvents((prev) => prev.filter((event) => !matchesPendingScan(event, card)));
-    showNotification(fullNameOf(card.cardData) + ' added to collection', 'success');
-  }, [mergeCardsIntoCollection, pendingCards, showNotification]);
+    const [row] = dispatchPending({ type: 'moved-to-collection', entryIds: [entryId] }).effects.toCollection;
+    if (row) showNotification(fullNameOf(row.cardData) + ' added to collection', 'success');
+  }, [dispatchPending, showNotification]);
 
   const handleConfirmAllPending = useCallback(() => {
-    if (pendingCards.length === 0) return;
-    mergeCardsIntoCollection(pendingCards);
-    setPendingCards([]);
-    setRecentPendingScanEvents([]);
-    showNotification(pendingCards.length + ' card rows added to collection', 'success');
-  }, [mergeCardsIntoCollection, pendingCards, showNotification]);
+    const moved = dispatchPending({ type: 'moved-to-collection', all: true }).effects.toCollection;
+    if (moved.length > 0) showNotification(moved.length + ' card rows added to collection', 'success');
+  }, [dispatchPending, showNotification]);
 
   const handleRemovePending = useCallback((entryId) => {
-    const card = pendingCards.find((entry) => entry.entryId === entryId);
-    setPendingCards((prev) => prev.filter((entry) => entry.entryId !== entryId));
-    if (card) setRecentPendingScanEvents((prev) => prev.filter((event) => !matchesPendingScan(event, card)));
-    forgetLearnedReferences(card?.learnedReferenceIds);
-  }, [pendingCards]);
+    dispatchPending({ type: 'row-removed', entryId });
+  }, [dispatchPending]);
 
   const handleAdjustPendingQuantity = useCallback((entryId, delta) => {
-    const card = pendingCards.find((entry) => entry.entryId === entryId);
-    if (!card || delta === 0) return;
-    if (card.quantity + delta <= 0) {
-      handleRemovePending(entryId);
-      return;
-    }
-    // Lowering the quantity undoes the most recent user-confirmed scans first.
-    const ids = card.learnedReferenceIds || [];
-    const kept = delta < 0 ? ids.slice(0, Math.max(0, ids.length + delta)) : ids;
-    forgetLearnedReferences(ids.slice(kept.length));
-    setPendingCards((prev) => prev.map((entry) => entry.entryId === entryId
-      ? { ...entry, quantity: Math.max(1, entry.quantity + delta), ...(kept !== ids ? { learnedReferenceIds: kept } : {}) }
-      : entry));
-    if (delta > 0) recordRecentPendingScan(card, Date.now());
-  }, [handleRemovePending, pendingCards, recordRecentPendingScan]);
+    dispatchPending({ type: 'quantity-adjusted', entryId, delta });
+  }, [dispatchPending]);
 
-  // Clearing is not undoing: learned references saved by these rows stay.
   const handleClearPending = useCallback(() => {
-    setPendingCards([]);
-    setRecentPendingScanEvents([]);
-  }, []);
+    dispatchPending({ type: 'cleared' });
+  }, [dispatchPending]);
 
   const handleUpdateCard = useCallback((index, updatedCard) => {
     setScannedCards((prev) => prev.map((entry, i) => i === index

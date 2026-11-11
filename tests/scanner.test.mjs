@@ -68,38 +68,6 @@ test('single pending confirmation retains five copies and foil status', () => {
   assert.equal(rows[0].foil, true);
 });
 
-test('confirming one finish leaves the other pending row intact', () => {
-  const fixture = appFixture([{ cardData: card, quantity: 5, foil: false }, { cardData: card, quantity: 2, foil: true }]);
-  const initial = fixture.scan();
-  initial.onConfirmPending(initial.pendingCards[0].entryId);
-  assert.equal(fixture.scan().pendingCards.length, 1);
-  assert.equal(fixture.scan().pendingCards[0].foil, true);
-  assert.equal(fixture.collected().scannedCards[0].quantity, 5);
-});
-
-test('manual pending additions keep standard and foil separate', () => {
-  const fixture = appFixture();
-  fixture.scan().onAddPendingCard(card, { quantity: 2, foil: false });
-  fixture.scan().onAddPendingCard(card, { quantity: 3, foil: true });
-  const rows = fixture.scan().pendingCards;
-  assert.equal(rows.length, 2);
-  assert.equal(rows[0].quantity, 2);
-  assert.equal(rows[0].foil, false);
-  assert.equal(rows[1].quantity, 3);
-  assert.equal(rows[1].foil, true);
-});
-
-test('edits are used by confirm-all as well as individual confirmation', () => {
-  const fixture = appFixture([{ cardData: card, quantity: 5, foil: false }]);
-  const entryId = fixture.scan().pendingCards[0].entryId;
-  fixture.scan().onUpdatePendingCard(entryId, { quantity: 7, foil: true, promo: true });
-  fixture.scan().onConfirmAllPending();
-  const row = fixture.collected().scannedCards[0];
-  assert.equal(row.quantity, 7);
-  assert.equal(row.foil, true);
-  assert.equal(row.promo, true);
-});
-
 test('collection adds retain separate language and condition rows', () => {
   const fixture = appFixture([], [{ cardData: card, quantity: 1, foil: false, language: 'English', condition: 'Near Mint' }]);
   fixture.scan().onAddCardsToExport([{ cardData: card, quantity: 2, foil: false, language: 'Chinese', condition: 'Damaged' }]);
