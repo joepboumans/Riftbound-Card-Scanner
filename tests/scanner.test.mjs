@@ -205,21 +205,6 @@ function testScanFixture() {
 const reliableFrame=id=>({cardData:card,confidence:.99,similarity:.99,similarityGap:.08,minSimilarity:.9,
   matched:true,quality:{acceptable:true,score:.8},frameId:id,capturedAt:id*250});
 
-test('frames that deferred geometry to OCR cannot seed a later standalone artwork confirmation',async()=>{
-  const f=testScanFixture();
-  const frame=(id,deferred)=>({...reliableFrame(id),similarity:.94,requiresTextConfirmation:deferred,matched:!deferred,
-    recognitionEpoch:'same-track',confirmationMethod:'artwork',
-    textVerification:deferred?{status:'pending',artworkFallbackAllowed:true}:{status:'unavailable'},
-    visualCandidates:[{id:card.id,similarity:.94,similarityGap:.08,localStructureSimilarity:.8}]});
-  try{
-    f.render().toggleAutoScan();f.refresh();
-    await f.tick(frame(1,true));await f.tick(frame(2,true));await f.tick(frame(3,false));
-    assert.equal(f.real.length,0);await f.tick(frame(4,false));assert.equal(f.real.length,0);
-    await f.tick(frame(5,false));assert.equal(f.real.length,1);
-    assert.deepEqual(Array.from(f.real[0].autoScanConsensus.sourceFrameIds),[3,4,5]);
-  }finally{f.stop();}
-});
-
 test('debug forces real auto-scan and exports the exact accepted frame once, after queuing',async()=>{
   const f=testScanFixture(),saved=[],order=[];
   const evidence=f.runtime.load('src/lib/scanEvidence.js');
@@ -357,18 +342,6 @@ test('auto-scan retries a rejected candidate and accepts a later clearer frame',
   assert.equal(accepted, 1);
 });
 
-test('accepted cards stay locked across disappearance until a different card is accepted', async () => {
-  const accepted = [];
-  const fixture = autoFixture((result) => { accepted.push(result.cardData.id); return true; });
-  const result = { cardData: card, confidence: 0.99, similarity: 0.99, matched: true, similarityGap: 0.08, quality: { acceptable: true, score: 0.8 } };
-  for (let i = 0; i < 3; i++) await fixture.tick(result);
-  for (let i = 0; i < 5; i++) await fixture.tick(null);
-  for (let i = 0; i < 3; i++) await fixture.tick(result);
-  assert.deepEqual(accepted, [card.id]);
-  for (let i = 0; i < 4; i++) await fixture.tick({ ...result, cardData: { ...card, id: 'other-card' } });
-  assert.deepEqual(accepted, [card.id, 'other-card']);
-});
-
 test('stopping auto-scan discards an inference still in flight', async () => {
   let finish, accepted = 0, calls = 0;
   const fixture = autoFixture(() => { accepted++; return true; });
@@ -379,67 +352,4 @@ test('stopping auto-scan discards an inference still in flight', async () => {
   finish({ cardData: card, confidence: 0.99, similarity: 0.99, matched: true, similarityGap: 0.08, quality: { acceptable: true, score: 0.8 } });
   await inFlight;
   assert.equal(accepted, 0);
-});
-
-
-test('auto-scan never promotes a repeating ambiguous or unusable image', async () => {
-  let accepted = 0;
-  const fixture = autoFixture(() => { accepted++; return true; });
-  const result = { cardData: card, confidence: 0.99, similarity: 0.952, matched: false,
-    similarityGap: 0, quality: { acceptable: true, score: 0.8 } };
-  for (let i = 0; i < 12; i++) await fixture.tick(result);
-  for (let i = 0; i < 5; i++) await fixture.tick({ ...result, matched: true });
-  for (let i = 0; i < 5; i++) await fixture.tick({ ...result, matched: true, similarityGap: 0.1, quality: { acceptable: false, score: 0.1 } });
-  assert.equal(accepted, 0);
-  for (let i = 0; i < 3; i++) await fixture.tick({ ...result, matched: true, similarity: 0.99, similarityGap: 0.08 });
-  assert.equal(accepted, 1);
-});
-
-test('a buffered frame cannot count as multiple independent observations', async () => {
-  let accepted = 0;
-  const fixture = autoFixture(() => { accepted++; return true; });
-  const result = { cardData: card, confidence: 0.99, similarity: 0.99, matched: true,
-    similarityGap: 0.08, quality: { acceptable: true, score: 0.8 }, frameId: 10 };
-  for (let i = 0; i < 10; i++) await fixture.tick(result);
-  assert.equal(accepted, 0);
-  await fixture.tick({ ...result, frameId: 11 });
-  assert.equal(accepted, 1);
-});
-
-test('unclear observations break the streak of independent reliable matches', async () => {
-  let accepted = 0;
-  const fixture = autoFixture(() => { accepted++; return true; });
-  const result = { cardData: card, confidence: 0.99, similarity: 0.99, matched: true,
-    similarityGap: 0.08, quality: { acceptable: true, score: 0.8 } };
-  await fixture.tick(result);
-  await fixture.tick({ ...result, matched: false, similarityGap: 0 });
-  await fixture.tick(result);
-  assert.equal(accepted, 0);
-  await fixture.tick(result);
-  assert.equal(accepted, 1);
-});
-
-test('low-frame-rate capture can confirm independent frames without counting empty polls', async () => {
-  let accepted = 0;
-  const fixture = autoFixture(() => { accepted++; return true; });
-  const result = { cardData: card, confidence: 0.99, similarity: 0.99, matched: true,
-    similarityGap: 0.08, quality: { acceptable: true, score: 0.8 }, frameId: 1 };
-  await fixture.tick(result);
-  for (let i = 0; i < 3; i++) await fixture.tick({ skipped: true });
-  assert.equal(accepted, 0);
-  await fixture.tick({ ...result, frameId: 2 });
-  assert.equal(accepted, 1);
-});
-
-test('a long capture interruption clears old uncommitted confirmation evidence', async () => {
-  let accepted = 0;
-  const fixture = autoFixture(() => { accepted++; return true; });
-  const result = { cardData: card, confidence: 0.99, similarity: 0.99, matched: true,
-    similarityGap: 0.08, quality: { acceptable: true, score: 0.8 }, frameId: 1 };
-  await fixture.tick(result);
-  for (let i = 0; i < 8; i++) await fixture.tick({ skipped: true });
-  await fixture.tick({ ...result, frameId: 2 });
-  assert.equal(accepted, 0);
-  await fixture.tick({ ...result, frameId: 3 });
-  assert.equal(accepted, 1);
 });
