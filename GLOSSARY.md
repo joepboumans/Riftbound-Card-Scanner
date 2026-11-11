@@ -45,6 +45,10 @@ _Avoid_: candidate picker, overlay picker
 The dialog that opens after a Snap the scanner did not accept, letting the user pick from the candidates or search.
 _Avoid_: manual review, confirm dialog
 
+**Pending list**:
+The scanned cards waiting for the user to add them to the collection. One line of it is a **pending row**.
+_Avoid_: queue, scan list, staging list
+
 ## Cards
 
 **Print**:
