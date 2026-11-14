@@ -6,8 +6,7 @@ import CardCounter from '../scanner/CardCounter.jsx';
 import ImageDropZone from '../identify/ImageDropZone.jsx';
 import DetectionCanvas, { DETECTION_COLORS } from '../identify/DetectionCanvas.jsx';
 import CardDetailPanel from '../identify/CardDetailPanel.jsx';
-import { CardTextIndex } from '../../lib/cardTextIdentity.js';
-import { recognizeCard, buildRecognitionResult, applyTextVerification, matchFromRanking } from '../../lib/cardRecognition.js';
+import { scanPhoto } from '../../lib/cardScan.js';
 import { getDetector } from '../../lib/yoloDetector.js';
 import { getMatcher } from '../../lib/cardMatcher.js';
 import { downloadCSV, copyDeckList, exportFileType, validateForExport, EXPORT_FORMATS } from '../../lib/csvExporter.js';
@@ -504,72 +503,29 @@ export default function ScanTab({
     setDetections([]);
     setCheckedIndices(new Set());
     try {
-      const canvas = document.createElement('canvas');
-      canvas.width = imageElement.naturalWidth;
-      canvas.height = imageElement.naturalHeight;
-      canvas.getContext('2d').drawImage(imageElement, 0, 0);
-
-      const detector = getDetector();
-      if (detector.state !== 'ready') {
+      const scanned = await scanPhoto(imageElement, { original: originalImageRef.current || imageElement,
+        detector: getDetector(), matcher: getMatcher(), photoId: `photo-${epoch}`,
+        isCurrent: () => epoch === photoEpochRef.current,
+        settings: { setFilter: scanSetFilter, minSimilarity: scanMatching.minSimilarity,
+          minSimilarityGap: scanMatching.minSimilarityGap, textVerifier, cropRefiner } });
+      if (!scanned) return;
+      if (scanned.status === 'detector-not-ready') {
         showNotification('Detector not ready', 'error');
         setIsProcessing(false);
         return;
       }
-      const rawDetections = await detector.detect(canvas);
-      if (epoch !== photoEpochRef.current) return;
-      if (!rawDetections || rawDetections.length === 0) {
+      if (scanned.status === 'no-cards') {
         showNotification('No cards detected in the image', 'info');
         setIsProcessing(false);
         return;
       }
 
-      // Crop from original full-resolution image for better matching quality
-      const originalImage = originalImageRef.current || imageElement;
-      const origW = originalImage.naturalWidth || originalImage.width;
-      const dispW = imageElement.naturalWidth || imageElement.width;
-      const cropScale = origW / dispW;
-
-      const matcher = getMatcher();
-      const results = [];
-      for (const det of rawDetections) {
-        const recognition = await recognizeCard({ source: originalImage,
-          detection: { box: { ...det.box, cx: det.box.cx * cropScale, cy: det.box.cy * cropScale,
-            w: det.box.w * cropScale, h: det.box.h * cropScale } },
-          matcher, setFilter: scanSetFilter, photo: true, cropRefiner, candidates: Boolean(textVerifier) });
-        const crop = recognition.crop;
-        if (epoch !== photoEpochRef.current) return;
-        let matchResult = recognition.match;
-        let textVerification = null;
-        let recognitionResult = buildRecognitionResult(matchResult, recognition.quality, scanMatching.minSimilarity,
-          { geometryConflict: recognition.geometryConflict }, { minSimilarityGap: scanMatching.minSimilarityGap });
-        if (textVerifier && matchResult?.card) {
-          textVerification = await textVerifier.verifyPhoto(recognition.textCrop, { hint: matchResult.card,
-            alternativeCrops: recognition.alternateTextCrops,
-            index: new CardTextIndex(matcher.cards), frameId: `photo-${epoch}-${results.length}` });
-          if (epoch !== photoEpochRef.current) return;
-          const result = applyTextVerification(recognitionResult, matchResult, textVerification, { photo: true });
-          recognitionResult = result;
-          textVerification = result.textVerification;
-          const confirmed = matchResult.candidates?.find((entry) => entry.card.id === result.cardData?.id);
-          if (result.confirmationMethod === 'text' && confirmed) {
-            matchResult = { ...matchFromRanking([confirmed, ...matchResult.candidates.filter((entry) => entry.card.id !== confirmed.card.id)]), textVerification };
-          } else matchResult = { ...matchResult, textVerification };
-        }
-        results.push({
-          cx: det.box.cx, cy: det.box.cy, w: det.box.w, h: det.box.h,
-          angle: det.box.angle, confidence: det.confidence, cropCanvas: crop, matchResult,
-          geometryConflict: recognition.geometryConflict, cropMethod: recognition.cropMethod, textVerification, recognitionResult,
-          entry: matchResult?.card ? createCardEntry({
-            cardData: resolveCardData(matchResult.card),
-            confidence: det.confidence,
-            similarity: matchResult.similarity,
-          }, batchDefaults) : null,
-        });
-      }
-
-      const matched = matcher.ready
-        ? results.filter(r => r.matchResult && (r.recognitionResult.matched || r.matchResult.similarity >= scanMatching.minSimilarity || r.geometryConflict || r.textVerification?.status === 'conflict'))
-        : results;
+      const matched = scanned.cards.map((card) => ({ ...card,
+        entry: card.matchResult?.card ? createCardEntry({
+          cardData: resolveCardData(card.matchResult.card),
+          confidence: card.confidence,
+          similarity: card.matchResult.similarity,
+        }, batchDefaults) : null }));
       setDetections(matched);
       if (matched.length > 0) {
         showNotification(`${matched.length} card${matched.length !== 1 ? 's' : ''} detected`, 'success');

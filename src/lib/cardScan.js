@@ -1,5 +1,5 @@
 import { CardTextIndex } from './cardTextIdentity.js';
-import { recognizeCard, buildRecognitionResult, applyTextVerification, rankForReview, reviewCandidatesFor } from './cardRecognition.js';
+import { recognizeCard, buildRecognitionResult, applyTextVerification, matchFromRanking, rankForReview, reviewCandidatesFor } from './cardRecognition.js';
 import { hasLocalArtworkSupport } from './localArtwork.js';
 import { selectGuideDetection, mapDetectionBox } from './scanGeometry.js';
 import { attachScanEvidence, attachScanArtwork } from './scanEvidence.js';
@@ -223,4 +223,69 @@ export async function snapScan(scanOnce, { accepts, textVerifier = null, now = D
     if (now() < deadline) await wait(SNAP_RETRY_MS);
   } while (now() < deadline);
   return { result, review };
+}
+
+/**
+ * Scans an uploaded photo for every card in it.
+ *   image     the photo as shown (possibly resized), used to find the cards
+ *   original  the full-resolution photo, used to crop each card
+ *   isCurrent() false once the user picked another photo: the scan stops
+ *   photoId   names this photo in text verification frame ids
+ * Returns null when cancelled, otherwise { status, cards }:
+ *   status 'detector-not-ready' | 'no-cards' | 'scanned'
+ *   cards  one entry per card worth listing, with its box in `image`
+ *          coordinates, crop, match, text verification and recognition result
+ * Photos use a quarter-turn retry and accept a single frame of text; learned
+ * references are not used.
+ */
+export async function scanPhoto(image, { original = image, detector, matcher, settings = {}, isCurrent = () => true, photoId = 'photo' }) {
+  const { setFilter, minSimilarity, minSimilarityGap, textVerifier = null, cropRefiner = null } = settings;
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  canvas.getContext('2d').drawImage(image, 0, 0);
+  if (detector.state !== 'ready') return { status: 'detector-not-ready', cards: [] };
+  const rawDetections = await detector.detect(canvas);
+  if (!isCurrent()) return null;
+  if (!rawDetections || rawDetections.length === 0) return { status: 'no-cards', cards: [] };
+
+  // Crop from the original full-resolution photo for better matching quality.
+  const cropScale = (original.naturalWidth || original.width) / (image.naturalWidth || image.width);
+  const results = [];
+  for (const det of rawDetections) {
+    const recognition = await recognizeCard({ source: original,
+      detection: { box: { ...det.box, cx: det.box.cx * cropScale, cy: det.box.cy * cropScale,
+        w: det.box.w * cropScale, h: det.box.h * cropScale } },
+      matcher, setFilter, photo: true, cropRefiner, candidates: Boolean(textVerifier) });
+    if (!isCurrent()) return null;
+    let matchResult = recognition.match;
+    let textVerification = null;
+    let recognitionResult = buildRecognitionResult(matchResult, recognition.quality, minSimilarity,
+      { geometryConflict: recognition.geometryConflict }, { minSimilarityGap });
+    if (textVerifier && matchResult?.card) {
+      textVerification = await textVerifier.verifyPhoto(recognition.textCrop, { hint: matchResult.card,
+        alternativeCrops: recognition.alternateTextCrops,
+        index: new CardTextIndex(matcher.cards), frameId: `${photoId}-${results.length}` });
+      if (!isCurrent()) return null;
+      const result = applyTextVerification(recognitionResult, matchResult, textVerification, { photo: true });
+      recognitionResult = result;
+      textVerification = result.textVerification;
+      // Text that names another candidate puts that candidate first.
+      const confirmed = matchResult.candidates?.find((entry) => entry.card.id === result.cardData?.id);
+      if (result.confirmationMethod === 'text' && confirmed) {
+        matchResult = { ...matchFromRanking([confirmed, ...matchResult.candidates.filter((entry) => entry.card.id !== confirmed.card.id)]), textVerification };
+      } else matchResult = { ...matchResult, textVerification };
+    }
+    results.push({
+      cx: det.box.cx, cy: det.box.cy, w: det.box.w, h: det.box.h,
+      angle: det.box.angle, confidence: det.confidence, cropCanvas: recognition.crop, matchResult,
+      geometryConflict: recognition.geometryConflict, cropMethod: recognition.cropMethod, textVerification, recognitionResult,
+    });
+  }
+
+  // A card is listed when it matched, is close to the threshold, or needs the user to look.
+  const cards = matcher.ready
+    ? results.filter(r => r.matchResult && (r.recognitionResult.matched || r.matchResult.similarity >= minSimilarity || r.geometryConflict || r.textVerification?.status === 'conflict'))
+    : results;
+  return { status: 'scanned', cards };
 }
