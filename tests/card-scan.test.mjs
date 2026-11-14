@@ -151,7 +151,8 @@ function photoFixture({ ranked = [{ card: { id: 'match', name: 'Match', code: 'F
   const runtime = createRuntime({ globals: { document: { createElement: () => ({ width: 0, height: 0, getContext: () => context }) } } });
   const { scanPhoto } = runtime.load('src/lib/cardScan.js');
   const detector = { state: ready, detect: async () => detections };
-  const matcher = { ready: true, cards: ranked.map((entry) => entry.card), rank: () => ranked };
+  const matcher = { ready: true, cards: ranked.map((entry) => entry.card), rankCalls: 0,
+    rank: () => { matcher.rankCalls++; return ranked; } };
   const image = { naturalWidth: 400, naturalHeight: 600 };
   const original = { naturalWidth: 800, naturalHeight: 1200 };
   const settings = { setFilter: 'all', minSimilarity: .9, minSimilarityGap: .05 };
@@ -187,7 +188,7 @@ test('picking another photo stops the scan', async () => {
   assert.equal(await fixture.scan({ isCurrent: () => current }), null);
 });
 
-test('a photo lists cards that match or come close, not ones far below the threshold', async () => {
+test('a photo lists cards whose artwork reaches the threshold, not ones below it', async () => {
   const card = (id) => ({ id, name: id, code: `FIX-${id}/100` });
   const close = await photoFixture({ ranked: [{ card: card('close'), similarity: .91 }, { card: card('next'), similarity: .5 }] }).scan();
   assert.equal(close.cards.length, 1);
@@ -207,4 +208,30 @@ test('photo text that confirms another candidate puts that candidate first', asy
   assert.equal(cards[0].matchResult.card.id, 'second');
   assert.equal(cards[0].textVerification.frameId, 'photo-7-0');
   assert.equal(cards[0].recognitionResult.confirmationMethod, 'text');
+});
+
+test('each photo card is matched upright and turned a quarter, keeping the better score', async () => {
+  const fixture = photoFixture({ detections: [
+    { confidence: .99, box: { cx: 100, cy: 150, w: 63, h: 88, angle: 0 } },
+    { confidence: .98, box: { cx: 300, cy: 400, w: 63, h: 88, angle: 0 } }] });
+  await fixture.scan();
+  assert.equal(fixture.matcher.rankCalls, 4);
+});
+
+test('a photo card whose text disagrees with its artwork is listed for the user to look at', async () => {
+  const card = (id) => ({ id, name: id, code: `FIX-${id}/100` });
+  const ranked = [{ card: card('far'), similarity: .7 }, { card: card('next'), similarity: .5 }];
+  const fixture = photoFixture({ ranked });
+  const textVerifier = { verifyPhoto: async () => ({ status: 'conflict', reason: 'readings-conflict' }) };
+  const { cards } = await fixture.scan({ settings: { ...fixture.settings, textVerifier } });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].textVerification.status, 'conflict');
+});
+
+test('without a loaded card database every photo detection is listed', async () => {
+  const card = (id) => ({ id, name: id, code: `FIX-${id}/100` });
+  const fixture = photoFixture({ ranked: [{ card: card('far'), similarity: .7 }, { card: card('next'), similarity: .5 }] });
+  fixture.matcher.ready = false;
+  const { cards } = await fixture.scan();
+  assert.equal(cards.length, 1);
 });

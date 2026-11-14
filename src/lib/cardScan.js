@@ -15,9 +15,14 @@ const TARGET_ASPECT_RATIO = 63 / 88;
 const MAX_ASPECT_DEVIATION = 0.22;
 
 /**
- * The scan module: everything between a camera frame and what the scanner
- * makes of it. Created once with getters for its long-lived tools, each read
- * when a scan starts:
+ * The scan module: everything between a camera frame or an uploaded photo and
+ * what the scanner makes of it. Three entry points:
+ *   createCardScan  live camera frames (below)
+ *   snapScan        Snap: retries live frames for up to two seconds
+ *   scanPhoto       every card in an uploaded photo
+ *
+ * createCardScan is created once with getters for its long-lived tools, each
+ * read when a scan starts:
  *   getDetector, getMatcher, getVisualVerifier, getLearnedReferences
  *
  *   scanFrame(frame, settings, options) → { observation, result }
@@ -240,11 +245,11 @@ export async function snapScan(scanOnce, { accepts, textVerifier = null, now = D
  */
 export async function scanPhoto(image, { original = image, detector, matcher, settings = {}, isCurrent = () => true, photoId = 'photo' }) {
   const { setFilter, minSimilarity, minSimilarityGap, textVerifier = null, cropRefiner = null } = settings;
+  if (detector.state !== 'ready') return { status: 'detector-not-ready', cards: [] };
   const canvas = document.createElement('canvas');
   canvas.width = image.naturalWidth;
   canvas.height = image.naturalHeight;
   canvas.getContext('2d').drawImage(image, 0, 0);
-  if (detector.state !== 'ready') return { status: 'detector-not-ready', cards: [] };
   const rawDetections = await detector.detect(canvas);
   if (!isCurrent()) return null;
   if (!rawDetections || rawDetections.length === 0) return { status: 'no-cards', cards: [] };
@@ -283,7 +288,9 @@ export async function scanPhoto(image, { original = image, detector, matcher, se
     });
   }
 
-  // A card is listed when it matched, is close to the threshold, or needs the user to look.
+  // A card is listed when it matched, its artwork reaches the threshold, or its
+  // crops or text disagree and the user needs to look. Without a loaded card
+  // database every detection is listed.
   const cards = matcher.ready
     ? results.filter(r => r.matchResult && (r.recognitionResult.matched || r.matchResult.similarity >= minSimilarity || r.geometryConflict || r.textVerification?.status === 'conflict'))
     : results;
