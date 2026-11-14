@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCardEntry, restoreCardEntries, mergeCardEntries, matchesPendingScan, getCardVariantKey } from '../src/lib/collection.js';
+import { createCardEntry, restoreCardEntries, mergeCardEntries } from '../src/lib/collection.js';
 import { resolveCardData } from '../src/lib/cardData.js';
 import { getSelectedDetectionEntries } from '../src/lib/scanEntries.js';
 import { generateCSV, validateForExport, EXPORT_FORMATS } from '../src/lib/csvExporter.js';
@@ -45,14 +45,6 @@ test('a split cannot reuse the source row id', () => {
   const original = entry({ quantity: 2 });
   const rows = mergeCardEntries([original], [{ ...original, quantity: 1, foil: true }]);
   assert.notEqual(rows[0].entryId, rows[1].entryId);
-});
-
-test('recent scans distinguish finishes and still resolve older card-id-only events', () => {
-  const standard = entry(), foil = entry({ foil: true });
-  const event = { variantKey: getCardVariantKey(foil), cardId: card.id };
-  assert.equal(matchesPendingScan(event, foil), true);
-  assert.equal(matchesPendingScan(event, standard), false);
-  assert.equal(matchesPendingScan({ cardId: card.id }, standard), true);
 });
 
 test('card metadata conversion retains a desktop cached image and variant number', () => {

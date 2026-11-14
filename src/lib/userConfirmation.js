@@ -92,11 +92,3 @@ export function choiceKeyAction(event, { count }) {
   const rank = event.key === 'Enter' ? 1 : ['1', '2', '3'].indexOf(event.key) + 1;
   return rank > 0 && rank <= count ? { type: 'pick', rank } : null;
 }
-
-// A pick and an automatic add of the same card this close together are one
-// physical card seen twice (e.g. Enter pressed as the scanner locks on).
-export const DUPLICATE_ADD_WINDOW_MS = 1500;
-
-export function isDuplicateAdd(lastAdd, cardId, now) {
-  return Boolean(lastAdd && lastAdd.cardId === cardId && now - lastAdd.at < DUPLICATE_ADD_WINDOW_MS);
-}

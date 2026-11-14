@@ -72,9 +72,3 @@ export function mergeCardEntries(existing, incoming) {
   }
   return updated;
 }
-
-export function matchesPendingScan(event, entry) {
-  if (event.entryId) return event.entryId === entry.entryId;
-  if (event.variantKey) return event.variantKey === getCardVariantKey(entry);
-  return event.cardId === entry.cardData.id;
-}

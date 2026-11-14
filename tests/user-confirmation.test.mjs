@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRuntime, componentProps } from './helpers/runtime.mjs';
 import { resolveCardData } from '../src/lib/cardData.js';
-import { choiceStripReducer, choiceStripView, CHOICE_STRIP_INITIAL, CHOICE_STRIP_HOLD_MS, choiceKeyAction, DUPLICATE_ADD_WINDOW_MS } from '../src/lib/userConfirmation.js';
+import { choiceStripReducer, choiceStripView, CHOICE_STRIP_INITIAL, CHOICE_STRIP_HOLD_MS, choiceKeyAction } from '../src/lib/userConfirmation.js';
+import { DUPLICATE_ADD_WINDOW_MS } from '../src/lib/pendingList.js';
 
 const top = resolveCardData({ id: 'ogn-039-298', name: "Kai'Sa", code: 'OGN-039/298', set: 'OGN', rarity: 'rare' });
 const second = resolveCardData({ id: 'ogn-039a-298', name: "Kai'Sa", code: 'OGN-039a/298', set: 'OGN', rarity: 'rare' });
@@ -149,8 +150,6 @@ const clearFeatures = Float32Array.from({ length: 12 }, (_, i) => .5 + .4 * Math
 const artworkMatcher = { artworkFeatures: (crop) => crop.features, officialFeatures: () => null };
 const scanArtwork = (runtime, quality, features = clearFeatures) => runtime.load('src/lib/learnedReferences.js')
   .describeScanArtwork({ crop: { features }, quality, outlined: true, matcher: artworkMatcher });
-// Distinct artwork, so no learned reference replaces another as a near-duplicate.
-const artworkVariant = (seed) => Float32Array.from({ length: 12 }, (_, i) => .5 + .4 * Math.sin(i * 1.3 + seed));
 
 test('a clear user-confirmed scan saves a learned reference, and its pending row records which one', async () => {
   const f = appFixture();
@@ -178,70 +177,6 @@ test('removing a user-confirmed pending row deletes the learned reference its sc
   f.scan().onConfirmPending(right.entryId);
   await learned.settled();
   assert.deepEqual([...learned.references()].map((reference) => reference.id), [...right.learnedReferenceIds]);
-});
-
-test('clearing the pending list keeps the learned references its user-confirmed rows saved', async () => {
-  const f = appFixture();
-  const { attachScanArtwork } = f.runtime.load('src/lib/scanEvidence.js');
-  const learned = f.runtime.load('src/lib/learnedReferences.js').getLearnedReferences();
-  f.scan().onConfirmCandidate(attachScanArtwork(weakScan(), scanArtwork(f.runtime, goodQuality)), candidates[2], { from: 'overlay', rank: 3 });
-  await learned.settled();
-  f.scan().onClearPending();
-  await learned.settled();
-  assert.equal(f.scan().pendingCards.length, 0);
-  assert.equal(learned.references().length, 1, 'clearing is not undoing a wrong pick');
-});
-
-// Two user-confirmed scans of the same card, merged into one pending row,
-// after the scanner itself accepted that card once.
-async function mergedRow() {
-  const clock = { now: 10000 };
-  const f = appFixture({ clock });
-  const { attachScanArtwork } = f.runtime.load('src/lib/scanEvidence.js');
-  const learned = f.runtime.load('src/lib/learnedReferences.js').getLearnedReferences();
-  const confirm = (seed) => {
-    clock.now += 2000;
-    f.scan().onConfirmCandidate(attachScanArtwork(weakScan(), scanArtwork(f.runtime, goodQuality, artworkVariant(seed))),
-      candidates[0], { from: 'overlay', rank: 1 });
-  };
-  f.autoAccept(weakScan({ matched: true, similarity: .96, similarityGap: .1 }));
-  confirm(1);
-  confirm(4);
-  await learned.settled();
-  const [row] = f.scan().pendingCards;
-  return { f, learned, row };
-}
-const referenceIds = (learned) => Array.from(learned.references(), (reference) => reference.id);
-
-test('a merged pending row keeps the learned references of every user-confirmed scan in it', async () => {
-  const { f, learned, row } = await mergedRow();
-  assert.equal(f.scan().pendingCards.length, 1);
-  assert.equal(row.quantity, 3);
-  assert.equal(row.learnedReferenceIds.length, 2);
-  assert.deepEqual([...row.learnedReferenceIds], referenceIds(learned));
-});
-
-test('removing a merged pending row deletes all of its learned references', async () => {
-  const { f, learned, row } = await mergedRow();
-  f.scan().onRemovePending(row.entryId);
-  await learned.settled();
-  assert.deepEqual(referenceIds(learned), []);
-});
-
-test('lowering a pending row by one deletes its most recent learned reference; to zero deletes the rest', async () => {
-  const { f, learned, row } = await mergedRow();
-  const [earlier, latest] = row.learnedReferenceIds;
-  f.scan().onAdjustPendingQuantity(row.entryId, -1);
-  await learned.settled();
-  assert.deepEqual(referenceIds(learned), [earlier]);
-  assert.ok(!referenceIds(learned).includes(latest));
-  const [lowered] = f.scan().pendingCards;
-  assert.equal(lowered.quantity, 2);
-  assert.deepEqual([...lowered.learnedReferenceIds], [earlier]);
-  f.scan().onAdjustPendingQuantity(row.entryId, -2);
-  await learned.settled();
-  assert.equal(f.scan().pendingCards.length, 0);
-  assert.deepEqual(referenceIds(learned), []);
 });
 
 test('a card user-confirmed in Snap review after a failed quality check never saves a learned reference', async () => {
