@@ -261,17 +261,19 @@ async function detectionFixture(sample = textured()) {
     'src/lib/yoloDetector.js': { getDetector: () => detector, DetectorState: { READY: 'ready', UNLOADED: 'unloaded', LOADING: 'loading', ERROR: 'error' } },
     'src/lib/cardMatcher.js': { getMatcher: () => matcher },
   } });
-  const hook = runtime.mount(runtime.load('src/hooks/useCardDetection.js').useCardDetection);
-  let detection = hook.render({ minSimilarity: 0.9 });
-  await detection.initDetector();
-  detection = hook.render({ minSimilarity: 0.9 });
   const frame = { width: 800, height: 900, frameId: 1, capturedAt: Date.now(),
     scanRegion: { x: 400, y: 100, guide: { x: 100, y: 100, width: 300, height: 500 } } };
   const cardScan = runtime.load('src/lib/cardScan.js').createCardScan({ getDetector: () => detector, getMatcher: () => matcher,
     getLearnedReferences: () => runtime.load('src/lib/learnedReferences.js').getLearnedReferences() });
   // Scans the fixture frame through the scan module: { observation, result }.
   const scan = (options = {}) => cardScan.scanFrame(frame, { setFilter: 'all', minSimilarity: 0.9, minSimilarityGap: 0.05 }, options);
-  return { runtime, hook, detection, scan, frame, matcher, detector, get matcherCalls() { return matcherCalls; }, get detectionCalls() { return detectionCalls; } };
+  // The detection hook, for tests of its own wiring.
+  const mountHook = async () => {
+    const hook = runtime.mount(runtime.load('src/hooks/useCardDetection.js').useCardDetection);
+    await hook.render({ minSimilarity: 0.9 }).initDetector();
+    return hook.render({ minSimilarity: 0.9 });
+  };
+  return { runtime, mountHook, scan, frame, matcher, detector, get matcherCalls() { return matcherCalls; }, get detectionCalls() { return detectionCalls; } };
 }
 
 test('the camera detection path chooses the guide card and maps its overlay back to the full video', async () => {
@@ -316,10 +318,11 @@ test('near-identical candidates stay ambiguous even with a high similarity', asy
 
 test('parallel callers cannot start a second inference, and cancelled frames are discarded', async () => {
   const fixture = await detectionFixture();
+  const detection = await fixture.mountHook();
   let finish, calls = 0;
   fixture.detector.detect = () => { calls++; return new Promise((resolve) => { finish = resolve; }); };
-  const pending = fixture.detection.detectSingleFrame(() => fixture.frame);
-  assert.equal(await fixture.detection.detectSingleFrame(() => fixture.frame), null);
+  const pending = detection.detectSingleFrame(() => fixture.frame);
+  assert.equal(await detection.detectSingleFrame(() => fixture.frame), null);
   assert.equal(calls, 1);
   fixture.frame.scanCancelled = true;
   finish([]);

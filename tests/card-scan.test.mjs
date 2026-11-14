@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRuntime } from './helpers/runtime.mjs';
 
-const { snapScan } = createRuntime().load('src/lib/cardScan.js');
+const sandbox = createRuntime();
+const { snapScan } = sandbox.load('src/lib/cardScan.js');
+const { isReliableScanResult } = sandbox.load('src/lib/scanQuality.js');
 
 const card = { id: 'fixture-001', name: 'Fixture Card', code: 'FIX-001/100' };
 const good = { acceptable: true, score: .8 };
@@ -15,7 +17,8 @@ async function snap(outcomes, { textVerifier = null, minSimilarity = .9 } = {}) 
   let now = 0, scans = 0;
   const waits = [];
   const result = await snapScan(async () => { now += 100; return outcomes[Math.min(scans++, outcomes.length - 1)]; },
-    { textVerifier, minSimilarity, now: () => now, wait: async (ms) => { waits.push(ms); now += ms; } });
+    { accepts: (outcome) => isReliableScanResult(outcome, minSimilarity), textVerifier,
+      now: () => now, wait: async (ms) => { waits.push(ms); now += ms; } });
   return { ...result, scans, waits, now };
 }
 const reader = (resets = { count: 0 }) => ({ reset() { resets.count++; } });

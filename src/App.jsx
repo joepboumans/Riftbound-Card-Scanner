@@ -890,7 +890,7 @@ export default function App() {
     try {
       const { result, review } = await snapScan(
         () => detection.detectSingleFrame(camera.captureFrame, { includeCandidate: true, includeReview: true }),
-        { textVerifier, minSimilarity: scanMatching.minSimilarity });
+        { accepts: passesScanThreshold, textVerifier });
 
       if (autoEnabledRef.current) return;
       if (result?.matched && handleCardDetected(result)) {
@@ -901,7 +901,7 @@ export default function App() {
         showNotification('No card accepted — hold the card steady or review it manually', 'info');
       }
     } finally { snapBusyRef.current = false; }
-  }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, showNotification, autoScan, textVerifier, scanMatching.minSimilarity, manualScanReview]);
+  }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, passesScanThreshold, showNotification, autoScan, textVerifier, manualScanReview]);
 
   // The one accept path for the Choice strip and Snap review. It skips the
   // acceptance rules on purpose: the user vouches for the card.

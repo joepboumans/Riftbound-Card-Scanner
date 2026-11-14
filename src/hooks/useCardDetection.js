@@ -25,24 +25,30 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
   if (!scanRef.current) scanRef.current = createCardScan({ getDetector: () => detectorRef.current, getMatcher,
     getVisualVerifier: () => visualVerifierRef.current, getLearnedReferences });
   const scan = scanRef.current;
-
-  const resetRecognition = useCallback(() => {
+  // Counts resets, so a scan that finishes after one does not show what it saw.
+  const resetsRef = useRef(0);
+  const resetScan = useCallback(() => {
+    resetsRef.current++;
     scan.reset();
     settingsRef.current.textVerifier?.reset();
-    setLastDetection(null);
   }, [scan]);
 
+  const resetRecognition = useCallback(() => {
+    resetScan();
+    setLastDetection(null);
+  }, [resetScan]);
+
   useEffect(() => {
-    settingsRef.current.textVerifier?.reset();
+    resetScan();
     settingsRef.current = { setFilter: scanSetFilter, minSimilarity, minSimilarityGap, cropRefiner, textVerifier };
-    scan.reset();
-  }, [scan, scanSetFilter, minSimilarity, minSimilarityGap, cropRefiner, textVerifier, recognitionContext, cameraIsActive]);
-  useEffect(() => () => { scan.reset(); settingsRef.current.textVerifier?.reset(); visualVerifierRef.current?.dispose(); visualVerifierRef.current = null; }, [scan]);
+  }, [resetScan, scanSetFilter, minSimilarity, minSimilarityGap, cropRefiner, textVerifier, recognitionContext, cameraIsActive]);
+  useEffect(() => () => { resetScan(); visualVerifierRef.current?.dispose(); visualVerifierRef.current = null; }, [resetScan]);
 
   /**
    * Initialize the YOLO detector
    */
   const initDetector = useCallback(async (modelPreference = 'normal') => {
+    resetsRef.current++;
     scan.reset();
     try {
       const detector = getDetector();
@@ -77,9 +83,10 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
     if (!frame) return { skipped: true };
     busyRef.current = true;
     setIsProcessing(true);
+    const resets = resetsRef.current;
     try {
       const { observation, result } = await scan.scanFrame(frame, settingsRef.current, options);
-      if (observation) setLastDetection(observation);
+      if (observation && resets === resetsRef.current) setLastDetection(observation);
       return result;
     } finally {
       busyRef.current = false;

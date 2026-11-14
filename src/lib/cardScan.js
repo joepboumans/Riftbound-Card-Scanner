@@ -6,7 +6,7 @@ import { attachScanEvidence, attachScanArtwork } from './scanEvidence.js';
 import { describeScanArtwork } from './learnedReferences.js';
 import { mergeLearnedCandidates } from './learnedCandidates.js';
 import { emitScanDiagnostic } from './scanDiagnostics.js';
-import { isScanFrameCancelled, isReliableScanResult } from './scanQuality.js';
+import { isScanFrameCancelled } from './scanQuality.js';
 import { hasStrongVisualProof, canReuseVisualBox } from './cardVisualProof.js';
 
 // Lower floor used only by auto-scan temporal voting.
@@ -38,7 +38,8 @@ export function createCardScan({ getDetector, getMatcher, getVisualVerifier = ()
   let epoch = 0;
   // The last card proven by its artwork geometry: the next frame may reuse its box.
   let visualFollowup = null;
-  // Card text lookup, rebuilt when the card database or the set filter changes.
+  // Card text lookup, rebuilt when the card database or the set filter changes
+  // (not by reset: it describes the database, not the card in front of the camera).
   let textIndex = null;
 
   function reset() {
@@ -52,23 +53,24 @@ export function createCardScan({ getDetector, getMatcher, getVisualVerifier = ()
     const observedAt = Date.now();
     const scanEpoch = epoch;
     const matcherRevision = matcher.revision;
-    const observation = { observedAt, frameId: frame.frameId, capturedAt: frame.capturedAt ?? observedAt,
+    const frameInfo = { observedAt, frameId: frame.frameId, capturedAt: frame.capturedAt ?? observedAt,
       detectorModel: detector.modelPreference, matcherRevision };
     const cancelled = () => isScanFrameCancelled(frame) || scanEpoch !== epoch || matcher.revision !== matcherRevision;
-    let published = null;
-    const publish = (seen) => { published = seen; emitScanDiagnostic('observation', { result: seen }); };
-    const finish = (result) => ({ observation: published, result });
-    emitScanDiagnostic('processing-start', observation);
+    // What the scanner saw, to show; the scan returns it with its result.
+    let observation = null;
+    const observe = (seen) => { observation = seen; emitScanDiagnostic('observation', { result: seen }); };
+    const scanned = (result) => ({ observation, result });
+    emitScanDiagnostic('processing-start', frameInfo);
     try {
       if (frame.scanMoving || ['too-dark', 'too-bright'].includes(frame.scanQuality?.issue)) {
         visualFollowup = null;
         textVerifier?.reset();
-        publish({ ...observation, matched: false, reason: frame.scanMoving ? 'moving' : frame.scanQuality.issue });
-        return finish(null);
+        observe({ ...frameInfo, matched: false, reason: frame.scanMoving ? 'moving' : frame.scanQuality.issue });
+        return scanned(null);
       }
       const recognize = (detection, visualOnly = false) => recognizeCard({ source: frame, detection, matcher,
         setFilter, minSimilarity,
-        textCorroboration: textVerifier?.getGeometryHint?.({ frame, context: `${scanEpoch}:${matcherRevision || 0}`, capturedAt: observation.capturedAt }),
+        textCorroboration: textVerifier?.getGeometryHint?.({ frame, context: `${scanEpoch}:${matcherRevision || 0}`, capturedAt: frameInfo.capturedAt }),
         cropRefiner, candidates: Boolean(textVerifier), visualOnly,
         visualVerifier: cropRefiner || textVerifier ? visualVerifier : null });
       let recognition, bestDetection, detectorReused = false, detectedAt = observedAt, detectorMs = 0, followupMissMs = 0;
@@ -88,24 +90,24 @@ export function createCardScan({ getDetector, getMatcher, getVisualVerifier = ()
         emitScanDiagnostic('detector-result', { frameId: frame.frameId, count: detections.length, detectorMs });
         bestDetection = selectGuideDetection(detections, frame.scanRegion?.guide);
       } else emitScanDiagnostic('detector-followup', { frameId: frame.frameId, anchorFrameId: anchor.frameId });
-      if (cancelled()) return finish(null);
+      if (cancelled()) return scanned(null);
       if (!bestDetection) {
         textVerifier?.reset();
-        publish({ ...observation, matched: false, reason: 'outside-guide' });
-        return finish(null);
+        observe({ ...frameInfo, matched: false, reason: 'outside-guide' });
+        return scanned(null);
       }
       const box = mapDetectionBox(bestDetection.box, frame.scanRegion);
-      const base = { ...observation, box, confidence: bestDetection.confidence, matched: false,
+      const base = { ...frameInfo, box, confidence: bestDetection.confidence, matched: false,
         ...(bestDetection.detectorProposal ? { detectorProposal: true } : {}) };
       const boxRatio = bestDetection.box.w / Math.max(1, bestDetection.box.h);
       const normalizedRatio = Math.min(boxRatio, 1 / boxRatio);
       if (Math.abs(normalizedRatio - TARGET_ASPECT_RATIO) > MAX_ASPECT_DEVIATION) {
-        publish({ ...base, reason: 'outside-guide' });
-        return finish(null);
+        observe({ ...base, reason: 'outside-guide' });
+        return scanned(null);
       }
       recognition ||= await recognize(bestDetection);
       const recognizedAt = Date.now();
-      if (cancelled()) return finish(null);
+      if (cancelled()) return scanned(null);
       const quality = recognition.quality;
       if (frame.scanMoving) { quality.acceptable = false; quality.issue = 'moving'; }
       // The candidates shown to the user (Choice strip, Snap review), with
@@ -131,15 +133,15 @@ export function createCardScan({ getDetector, getMatcher, getVisualVerifier = ()
         textVerifier?.reset();
         const failed = { ...base, quality, reason: quality.issue };
         const reviewed = withReviewCandidates(failed, () => rankForReview(recognition.crop, matcher, { setFilter }));
-        publish(failed);
-        return finish(reviewed);
+        observe(failed);
+        return scanned(reviewed);
       }
       const matchResult = recognition.match;
       if (!matchResult?.card) {
         textVerifier?.reset();
         const unmatched = { ...base, quality, reason: 'low-similarity' };
-        publish(unmatched);
-        return finish(withReviewCandidates(unmatched, () => []));
+        observe(unmatched);
+        return scanned(withReviewCandidates(unmatched, () => []));
       }
       let result = buildRecognitionResult(matchResult, quality, minSimilarity, { ...base,
         visualVerification: recognition.visualVerification,
@@ -173,7 +175,7 @@ export function createCardScan({ getDetector, getMatcher, getVisualVerifier = ()
         frameId: frame.frameId, capturedAt: frame.capturedAt, cardId: result.cardData.id,
         detection: { box: { ...bestDetection.box }, confidence: bestDetection.confidence, detectorProposal: bestDetection.detectorProposal } };
       result.timings = { detectorReused, detectorMs, followupMissMs, artworkMs: recognizedAt - detectedAt + followupMissMs,
-        frameMs: Date.now() - observedAt, sourceAgeMs: Date.now() - observation.capturedAt };
+        frameMs: Date.now() - observedAt, sourceAgeMs: Date.now() - frameInfo.capturedAt };
       if (options.retainEvidence) attachScanEvidence(result, { frame,
         candidates: (matchResult.candidates || [matchResult]).slice(0, 5).map(entry => ({
           id: entry.card.id, name: entry.card.name, code: entry.card.code, similarity: entry.similarity,
@@ -182,14 +184,14 @@ export function createCardScan({ getDetector, getMatcher, getVisualVerifier = ()
           artworkAlignment: entry.artworkAlignment, similarityGap: entry.similarity - (entry.secondBestSim ?? 0),
         })) });
       showCandidates(result, reviewCandidatesFor(matchResult));
-      publish(result);
-      if (result.matched || options.includeReview || (options.includeCandidate && (matchResult.similarity >= CANDIDATE_SIMILARITY_FLOOR || hasLocalArtworkSupport(matchResult)))) return finish(result);
-      return finish(null);
+      observe(result);
+      if (result.matched || options.includeReview || (options.includeCandidate && (matchResult.similarity >= CANDIDATE_SIMILARITY_FLOOR || hasLocalArtworkSupport(matchResult)))) return scanned(result);
+      return scanned(null);
     } catch (error) {
       console.error('[Detection] Frame processing error:', error);
-      publish({ ...observation, matched: false, reason: 'low-similarity' });
+      observe({ ...frameInfo, matched: false, reason: 'low-similarity' });
       emitScanDiagnostic('processing-error', { frameId: frame.frameId, error: String(error?.message || error) });
-      return finish(null);
+      return scanned(null);
     }
   }
 
@@ -204,9 +206,10 @@ const SNAP_RETRY_MS = 125;
  * or, with text verification on, the card text has been read. Returns the last
  * result and the card to show in Snap review: the latest outlined card,
  * preferring one with acceptable quality.
- *   scanOnce()  scans one fresh frame with Snap review candidates
+ *   scanOnce()        scans one fresh frame with Snap review candidates
+ *   accepts(result)   whether the scanner accepts that result (the user's threshold)
  */
-export async function snapScan(scanOnce, { textVerifier = null, minSimilarity, now = Date.now,
+export async function snapScan(scanOnce, { accepts, textVerifier = null, now = Date.now,
   wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   textVerifier?.reset();
   let result, review = null;
@@ -215,7 +218,7 @@ export async function snapScan(scanOnce, { textVerifier = null, minSimilarity, n
     result = await scanOnce();
     const outlined = Boolean(result?.box || result?.reviewCandidates?.length);
     if (outlined && (result.quality?.acceptable || !review?.quality?.acceptable)) review = result;
-    if (isReliableScanResult(result, minSimilarity) || !textVerifier ||
+    if (accepts(result) || !textVerifier ||
       (result?.quality?.acceptable && result.textVerification?.status !== 'pending')) break;
     if (now() < deadline) await wait(SNAP_RETRY_MS);
   } while (now() < deadline);

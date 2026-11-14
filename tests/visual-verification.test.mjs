@@ -228,12 +228,12 @@ test('the scan module skips OCR for fresh visual proof and reuses a detector box
     getVisualVerifier:()=>visualVerifier,getLearnedReferences:()=>runtime.load('src/lib/learnedReferences.js').getLearnedReferences()});
   const settings={setFilter:'all',minSimilarity:.9,minSimilarityGap:.05,textVerifier:verifier,cropRefiner:()=>{throw new Error('No repeated geometry search');}};
   const source=id=>({width:800,height:900,frameId:id,capturedAt:now-50,scanMotionEpoch:motion.epoch,scanMotionContext:motion});
-  const detection={detectSingleFrame:async capture=>(await scan.scanFrame(capture(),settings)).result};
+  const scanSource=async id=>(await scan.scanFrame(source(id),settings)).result;
   try{
-    const first=await detection.detectSingleFrame(()=>source(1));assert.equal(first.matched,true);assert.equal(first.textVerification.status,'not-required');
-    now+=250;const second=await detection.detectSingleFrame(()=>source(2));assert.equal(second.matched,true);assert.equal(second.timings.detectorReused,true);assert.equal(detectCalls,1);
-    now+=250;const third=await detection.detectSingleFrame(()=>source(3));assert.equal(third.timings.detectorReused,false);assert.equal(detectCalls,2);assert.equal(textCalls,0);
+    const first=await scanSource(1);assert.equal(first.matched,true);assert.equal(first.textVerification.status,'not-required');
+    now+=250;const second=await scanSource(2);assert.equal(second.matched,true);assert.equal(second.timings.detectorReused,true);assert.equal(detectCalls,1);
+    now+=250;const third=await scanSource(3);assert.equal(third.timings.detectorReused,false);assert.equal(detectCalls,2);assert.equal(textCalls,0);
     cancelDuringVerification=true;now+=250;
-    assert.equal(await detection.detectSingleFrame(()=>source(4)),null,'Motion while the worker runs invalidates its late proof');
-  }finally{verifier.dispose?.();}
+    assert.equal(await scanSource(4),null,'Motion while the worker runs invalidates its late proof');
+  }finally{verifier.dispose?.();visualVerifier.dispose();}
 });
