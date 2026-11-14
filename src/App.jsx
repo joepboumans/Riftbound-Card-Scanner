@@ -14,6 +14,7 @@ import CollectionTab from './components/collection/CollectionTab.jsx';
 import SettingsTab from './components/settings/SettingsTab.jsx';
 import { useCamera } from './hooks/useCamera.js';
 import { useCardDetection } from './hooks/useCardDetection.js';
+import { snapScan } from './lib/cardScan.js';
 import { useAutoScan } from './hooks/useAutoScan.js';
 import { useScanSound } from './hooks/useScanSound.js';
 import { useNewPrintCheck } from './hooks/useNewPrintCheck.js';
@@ -887,18 +888,9 @@ export default function App() {
     if (!camera.isActive || detection.isProcessing || snapBusyRef.current || autoEnabledRef.current || manualScanReview) return;
     snapBusyRef.current = true;
     try {
-      textVerifier?.reset();
-      let result, review = null;
-      const deadline = Date.now() + 2000;
-      do {
-        result = await detection.detectSingleFrame(camera.captureFrame, { includeCandidate: true, includeReview: true });
-        // Keep the latest outlined card, preferring one with acceptable quality.
-        const outlined = Boolean(result?.box || result?.reviewCandidates?.length);
-        if (outlined && (result.quality?.acceptable || !review?.quality?.acceptable)) review = result;
-        if (passesScanThreshold(result) || !textVerifier ||
-          (result?.quality?.acceptable && result.textVerification?.status !== 'pending')) break;
-        if (Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 125));
-      } while (Date.now() < deadline);
+      const { result, review } = await snapScan(
+        () => detection.detectSingleFrame(camera.captureFrame, { includeCandidate: true, includeReview: true }),
+        { accepts: passesScanThreshold, textVerifier });
 
       if (autoEnabledRef.current) return;
       if (result?.matched && handleCardDetected(result)) {
@@ -909,7 +901,7 @@ export default function App() {
         showNotification('No card accepted — hold the card steady or review it manually', 'info');
       }
     } finally { snapBusyRef.current = false; }
-  }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, showNotification, autoScan, textVerifier, manualScanReview]);
+  }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, passesScanThreshold, showNotification, autoScan, textVerifier, manualScanReview]);
 
   // The one accept path for the Choice strip and Snap review. It skips the
   // acceptance rules on purpose: the user vouches for the card.

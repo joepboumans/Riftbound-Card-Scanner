@@ -261,18 +261,24 @@ async function detectionFixture(sample = textured()) {
     'src/lib/yoloDetector.js': { getDetector: () => detector, DetectorState: { READY: 'ready', UNLOADED: 'unloaded', LOADING: 'loading', ERROR: 'error' } },
     'src/lib/cardMatcher.js': { getMatcher: () => matcher },
   } });
-  const hook = runtime.mount(runtime.load('src/hooks/useCardDetection.js').useCardDetection);
-  let detection = hook.render({ minSimilarity: 0.9 });
-  await detection.initDetector();
-  detection = hook.render({ minSimilarity: 0.9 });
   const frame = { width: 800, height: 900, frameId: 1, capturedAt: Date.now(),
     scanRegion: { x: 400, y: 100, guide: { x: 100, y: 100, width: 300, height: 500 } } };
-  return { runtime, hook, detection, frame, matcher, detector, get matcherCalls() { return matcherCalls; }, get detectionCalls() { return detectionCalls; } };
+  const cardScan = runtime.load('src/lib/cardScan.js').createCardScan({ getDetector: () => detector, getMatcher: () => matcher,
+    getLearnedReferences: () => runtime.load('src/lib/learnedReferences.js').getLearnedReferences() });
+  // Scans the fixture frame through the scan module: { observation, result }.
+  const scan = (options = {}) => cardScan.scanFrame(frame, { setFilter: 'all', minSimilarity: 0.9, minSimilarityGap: 0.05 }, options);
+  // The detection hook, for tests of its own wiring.
+  const mountHook = async () => {
+    const hook = runtime.mount(runtime.load('src/hooks/useCardDetection.js').useCardDetection);
+    await hook.render({ minSimilarity: 0.9 }).initDetector();
+    return hook.render({ minSimilarity: 0.9 });
+  };
+  return { runtime, mountHook, scan, frame, matcher, detector, get matcherCalls() { return matcherCalls; }, get detectionCalls() { return detectionCalls; } };
 }
 
 test('the camera detection path chooses the guide card and maps its overlay back to the full video', async () => {
   const fixture = await detectionFixture();
-  const result = await fixture.detection.detectSingleFrame(() => fixture.frame);
+  const result = (await fixture.scan()).result;
   assert.equal(result.cardData.id, 'correct');
   assert.equal(result.box.cx, 650);
   assert.equal(result.box.cy, 450);
@@ -284,26 +290,27 @@ test('the camera detection path chooses the guide card and maps its overlay back
 
 test('an unusably dark detected card is rejected before matching', async () => {
   const fixture = await detectionFixture(pixels(() => 0));
-  assert.equal(await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true }), null);
+  const { result, observation } = await fixture.scan({ includeCandidate: true });
+  assert.equal(result, null);
   assert.equal(fixture.matcherCalls, 0);
-  assert.equal(fixture.hook.render().lastDetection.reason, 'too-dark');
+  assert.equal(observation.reason, 'too-dark');
 });
 
 test('severe frame darkness and movement avoid unnecessary detector retries', async () => {
   const fixture = await detectionFixture();
   fixture.frame.scanQuality = { issue: 'too-dark' };
-  assert.equal(await fixture.detection.detectSingleFrame(() => fixture.frame), null);
+  assert.equal((await fixture.scan()).result, null);
   assert.equal(fixture.detectionCalls, 0);
   fixture.frame.scanQuality = { issue: null };
   fixture.frame.scanMoving = true;
-  assert.equal(await fixture.detection.detectSingleFrame(() => fixture.frame), null);
+  assert.equal((await fixture.scan()).result, null);
   assert.equal(fixture.detectionCalls, 0);
 });
 
 test('near-identical candidates stay ambiguous even with a high similarity', async () => {
   const fixture = await detectionFixture();
   fixture.matcher.identify = () => ({ card: { id: 'unclear', name: 'Unclear' }, similarity: 0.952, secondBestSim: 0.952 });
-  const result = await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true });
+  const result = (await fixture.scan({ includeCandidate: true })).result;
   assert.equal(result.matched, false);
   assert.equal(result.reason, 'ambiguous');
   assert.equal(isReliableScanResult(result), false);
@@ -311,10 +318,11 @@ test('near-identical candidates stay ambiguous even with a high similarity', asy
 
 test('parallel callers cannot start a second inference, and cancelled frames are discarded', async () => {
   const fixture = await detectionFixture();
+  const detection = await fixture.mountHook();
   let finish, calls = 0;
   fixture.detector.detect = () => { calls++; return new Promise((resolve) => { finish = resolve; }); };
-  const pending = fixture.detection.detectSingleFrame(() => fixture.frame);
-  assert.equal(await fixture.detection.detectSingleFrame(() => fixture.frame), null);
+  const pending = detection.detectSingleFrame(() => fixture.frame);
+  assert.equal(await detection.detectSingleFrame(() => fixture.frame), null);
   assert.equal(calls, 1);
   fixture.frame.scanCancelled = true;
   finish([]);
@@ -344,10 +352,10 @@ test('Snap ranks a failed-quality card for review only, never for acceptance', a
   const ranked = ['first', 'second', 'third', 'fourth'].map((id, index) => ({ card: { id, name: id, code: `FIX-00${index}/100` }, similarity: .8 - index / 20 }));
   let rankCalls = 0;
   fixture.matcher.rank = () => { rankCalls++; return ranked; };
-  assert.equal(await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true }), null,
+  assert.equal((await fixture.scan({ includeCandidate: true })).result, null,
     'auto scan still skips matching on a failed-quality frame');
   assert.equal(rankCalls, 0);
-  const result = await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true, includeReview: true });
+  const result = (await fixture.scan({ includeCandidate: true, includeReview: true })).result;
   assert.equal(result.matched, false);
   assert.equal(result.quality.acceptable, false);
   assert.equal(isReliableScanResult(result), false);
@@ -359,8 +367,8 @@ test('Snap ranks a failed-quality card for review only, never for acceptance', a
 test('Snap returns an outlined card with no ranked candidates for review', async () => {
   const fixture = await detectionFixture();
   fixture.matcher.identify = () => null;
-  assert.equal(await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true }), null);
-  const result = await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true, includeReview: true });
+  assert.equal((await fixture.scan({ includeCandidate: true })).result, null);
+  const result = (await fixture.scan({ includeCandidate: true, includeReview: true })).result;
   assert.equal(result.matched, false);
   assert.ok(result.box);
   assert.deepEqual(Array.from(result.reviewCandidates), []);
@@ -369,8 +377,8 @@ test('Snap returns an outlined card with no ranked candidates for review', async
 test('every ranked detection carries its top candidates and artwork crop for the Choice strip', async () => {
   const fixture = await detectionFixture();
   fixture.matcher.identify = () => ({ card: { id: 'unclear', name: 'Unclear' }, similarity: 0.8, secondBestSim: 0.79 });
-  const result = await fixture.detection.detectSingleFrame(() => fixture.frame, { includeCandidate: true });
-  assert.equal(fixture.hook.render().lastDetection.reviewCandidates[0].id, 'unclear');
+  const { result, observation } = await fixture.scan({ includeCandidate: true });
+  assert.equal(observation.reviewCandidates[0].id, 'unclear');
   const { getScanArtwork } = fixture.runtime.load('src/lib/scanEvidence.js');
   assert.ok(getScanArtwork(result).crop);
   assert.equal(getScanArtwork(result).quality, result.quality);
