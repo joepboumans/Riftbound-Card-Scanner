@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createAutoScanSession, POST_ACCEPT_COOLDOWN_MS } from '../src/lib/autoScanSession.js';
+import { createAutoScanSession, POST_ADD_COOLDOWN_MS } from '../src/lib/autoScanSession.js';
 import { resolveCardData } from '../src/lib/cardData.js';
 
 const card = resolveCardData({ id: 'fixture-001', name: 'Fixture Card', code: 'FIX-001/100', set: 'FIX', rarity: 'common' });
@@ -35,6 +35,7 @@ test('two strong frames in a row are accepted', () => {
   assert.equal(first.reason, 'collecting-visual-frames');
   assert.deepEqual(first.diagnostic, { frameId: 1, cardId: card.id, reason: 'collecting-visual-frames', visualFrames: 1, sourceFrameIds: [1] });
   assert.equal(second.type, 'accept');
+  assert.equal(second.reason, 'enough-frames');
   assert.equal(second.cardId, card.id);
   assert.equal(second.visualFrames, 2);
   assert.deepEqual(second.consensus, { hits: 2, matchedHits: 2, aggregateScore: second.consensus.aggregateScore,
@@ -47,8 +48,9 @@ test('moderate artwork needs three frames in a row over at least half a second',
   assert.deepEqual(decisions.map((decision) => decision.type), ['wait', 'wait', 'accept']);
   assert.equal(decisions[2].consensus.consecutiveHits, 3);
   assert.deepEqual(decisions[2].consensus.sourceFrameIds, [1, 2, 3]);
+});
 
-  // Three frames inside half a second are not enough yet.
+test('three moderate frames inside half a second are not enough yet', () => {
   const session = createAutoScanSession();
   assert.equal(session.observe(moderate(), 100).type, 'wait');
   assert.equal(session.observe(moderate(), 200).type, 'wait');
@@ -84,7 +86,7 @@ test('an accepted card stays locked across disappearance until a different card 
 test('a card locked from outside is not accepted again, and unlocking allows it', () => {
   const scan = autoScan();
   scan.session.lock(card.id, 0);
-  scan.wait(POST_ACCEPT_COOLDOWN_MS);
+  scan.wait(POST_ADD_COOLDOWN_MS);
   scan.repeat(3, strong());
   assert.equal(scan.accepted.length, 0);
   scan.session.unlock();
@@ -105,7 +107,7 @@ test('after an accept the next card waits out the cooldown', () => {
   const next = moderate({ cardData: other });
   const during = scan.repeat(3, next);
   assert.deepEqual(during.map((decision) => decision.reason), ['cooldown', 'cooldown', 'cooldown']);
-  assert.equal(during[0].diagnostic.remainingMs, POST_ACCEPT_COOLDOWN_MS - 250);
+  assert.equal(during[0].diagnostic.remainingMs, POST_ADD_COOLDOWN_MS - 250);
   const after = scan.repeat(3, next);
   assert.deepEqual(after.map((decision) => decision.type), ['wait', 'wait', 'accept']);
 });
@@ -146,7 +148,7 @@ test('an unclear frame breaks the run of reliable frames', () => {
   assert.equal(scan.accepted.length, 1);
 });
 
-test('four misses in a row forget the card being counted', () => {
+test('three misses in a row only break the run', () => {
   const scan = autoScan();
   scan.feed(moderate(), moderate());
   scan.repeat(3, null);
@@ -155,7 +157,9 @@ test('four misses in a row forget the card being counted', () => {
   scan.repeat(2, moderate());
   assert.equal(scan.accepted.length, 1);
   assert.equal(scan.accepted[0].consensus.hits, 5, 'hits before the misses still count');
+});
 
+test('four misses in a row start the count again', () => {
   const forgotten = autoScan();
   forgotten.feed(moderate(), moderate());
   forgotten.repeat(4, null);
@@ -163,14 +167,16 @@ test('four misses in a row forget the card being counted', () => {
   assert.equal(forgotten.accepted[0].consensus.hits, 3);
 });
 
-test('polls without a fresh frame are not counted, but a long interruption forgets the card', () => {
+test('polls without a fresh frame are not counted', () => {
   const brief = autoScan();
   brief.observe(strong({ frameId: 1 }));
   const empty = brief.repeat(3, { skipped: true });
   assert.ok(empty.every((decision) => decision.type === 'skip' && decision.reason === 'no-fresh-source'));
   brief.observe(strong({ frameId: 2 }));
   assert.equal(brief.accepted.length, 1);
+});
 
+test('a long capture interruption forgets the card being counted', () => {
   const long = autoScan();
   long.observe(strong({ frameId: 1 }));
   long.repeat(8, { skipped: true });
@@ -194,7 +200,7 @@ test('frames seen while text was being read count once the text is confirmed, wi
   assert.equal(scan.accepted[0].consensus.durationMs, 500);
 });
 
-test('frames that deferred to text cannot seed a later artwork-only confirmation', () => {
+test('frames that deferred to text cannot seed a later artwork-only accept', () => {
   const scan = autoScan();
   const frame = (frameId, deferred) => strong({ frameId, capturedAt: frameId * 250, similarity: .94, minSimilarity: .9,
     requiresTextConfirmation: deferred, matched: !deferred, recognitionEpoch: 'same-track', confirmationMethod: 'artwork',
@@ -216,7 +222,29 @@ test('reset forgets the frames seen so far but keeps the duplicate lock', () => 
   assert.equal(first.diagnostic.visualFrames, 1);
   assert.equal(scan.accepted.length, 1);
   scan.session.reset();
-  scan.wait(POST_ACCEPT_COOLDOWN_MS);
+  scan.wait(POST_ADD_COOLDOWN_MS);
   scan.repeat(3, strong());
   assert.equal(scan.accepted.length, 1, 'still locked');
+});
+
+test('a new text reading track starts the count again', () => {
+  const scan = autoScan();
+  const tracked = (frameId, recognitionEpoch) => moderate({ frameId, recognitionEpoch, textVerification: { status: 'unavailable' } });
+  scan.feed(tracked(1, 'track-1'), tracked(2, 'track-1'));
+  const [restarted] = scan.feed(tracked(3, 'track-2'));
+  assert.equal(restarted.diagnostic.visualFrames, 1);
+  assert.deepEqual(restarted.diagnostic.sourceFrameIds, [3]);
+});
+
+test('text-reading frames older than two seconds are not reused', () => {
+  const scan = autoScan();
+  const reading = (frameId, capturedAt) => moderate({ frameId, capturedAt, minSimilarity: .9, recognitionEpoch: 'track-1',
+    matched: false, reason: 'reading-text', textVerification: { status: 'pending' },
+    visualCandidates: [{ id: card.id, similarity: .92, similarityGap: .06 }] });
+  const proof = { status: 'confirmed', cardId: card.id, nameConfidence: 96, codeConfidence: 96, sourceFrameIds: [1, 2] };
+  scan.feed(reading(1, 0), reading(2, 1000));
+  const [decision] = scan.feed({ ...reading(3, 2500), matched: true, reason: null, confirmationMethod: 'text',
+    confirmationReason: 'name-number', textVerification: proof });
+  assert.equal(decision.type, 'wait');
+  assert.deepEqual(decision.diagnostic.sourceFrameIds, [2, 3], 'frame 1 fell out of the two-second window');
 });
