@@ -70,7 +70,7 @@ test('sound controls persist and an existing acceptance callback uses the latest
   let sound=view.render();const cleanups=view.runEffects();
   assert.equal(contexts.length,0);gestures.get('pointerdown')();await Promise.resolve();
   const accept=sound.playScanAccepted;assert.equal(accept(),true);
-  sound.updateSettings({enabled:false,volume:0.25});sound=view.render();view.runEffects();
+  runtime.load('src/lib/userSettings.js').getUserSettings().change('scanSound',{enabled:false,volume:0.25});sound=view.render();view.runEffects();
   assert.equal(accept(),false);
   assert.deepEqual(JSON.parse(runtime.values.get(SCAN_SOUND_STORAGE_KEY)),{enabled:false,volume:0.25});
   assert.equal(await sound.testSound(),true); // Explicit previews work while automatic sound is muted.
@@ -95,12 +95,14 @@ test('only an accepted camera result rings; unclear scans and manual bookkeeping
   assert.equal(rings,1);
 });
 
-test('settings controls expose enable, volume and an explicit preview', () => {
-  const runtime=createRuntime();const edits=[];let previews=0;
+test('settings controls change the saved sound and offer an explicit preview', () => {
+  const runtime=createRuntime({storage:{[SCAN_SOUND_STORAGE_KEY]:{enabled:true,volume:0.35}}});let previews=0;
+  const settings=runtime.load('src/lib/userSettings.js').getUserSettings();
   const view=runtime.mount(runtime.load('src/components/settings/SettingsTab.jsx').default);
-  const tree=view.render({batchDefaults:{},scanSoundSettings:{enabled:true,volume:0.35},onUpdateScanSound:(patch) => edits.push(patch),onTestScanSound:() => previews++});
-  nodes(tree,(node) => node.props?.['aria-label']==='Scan success sound')[0].props.onClick();
-  nodes(tree,(node) => node.props?.id==='scan-sound-volume')[0].props.onChange({target:{value:'65'}});
-  button(tree,'Play test sound').onClick();
-  assert.equal(edits[0].enabled,false);assert.equal(edits[1].volume,0.65);assert.equal(previews,1);
+  const tree=()=>view.render({onTestScanSound:() => previews++});
+  nodes(tree(),(node) => node.props?.['aria-label']==='Scan success sound')[0].props.onClick();
+  assert.deepEqual({...settings.read('scanSound')},{enabled:false,volume:0.35});
+  nodes(tree(),(node) => node.props?.id==='scan-sound-volume')[0].props.onChange({target:{value:'65'}});
+  assert.deepEqual({...settings.read('scanSound')},{enabled:false,volume:0.65});
+  button(tree(),'Play test sound').onClick();assert.equal(previews,1);
 });

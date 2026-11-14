@@ -2,8 +2,10 @@ import React, { useRef } from 'react';
 import { Shield, Sparkles, RotateCcw, Info, ExternalLink, Cpu, Download, Database, Search, RefreshCcw, Camera, Volume2, ScanLine } from 'lucide-react';
 import { CONDITIONS, LANGUAGES } from '../../data/sampleCards.js';
 import { EXPORT_FORMAT_OPTIONS } from '../../lib/csvExporter.js';
-import { CAMERA_PROFILES } from '../../lib/cameraControls.js';
-import { DEFAULT_SCAN_SOUND, normalizeScanSound } from '../../lib/scanSound.js';
+import { CAMERA_PROFILES, cameraProfileOf, withCameraProfile } from '../../lib/cameraControls.js';
+import { withPatch } from '../../lib/userSettings.js';
+import { useSetting } from '../../hooks/useSetting.js';
+import { normalizeScanSound } from '../../lib/scanSound.js';
 import { DEFAULT_SCAN_MATCHING, SCAN_MATCHING_LIMITS, normalizeScanMatching } from '../../lib/scanMatching.js';
 import { SCANNER_DIAGNOSTICS_AVAILABLE } from '../../lib/scannerExperiments.js';
 import { openDesktopUrl } from '../../lib/desktopBridge.js';
@@ -13,18 +15,8 @@ import { FALLBACK_EXCHANGE_RATE_DATE, FALLBACK_ECB_EUR_RATES, PRICE_CURRENCY_OPT
 const APP_VERSION_LABEL = __APP_RELEASE_VERSION__ || __APP_VERSION__;
 
 export default function SettingsTab({
-  batchDefaults,
-  onUpdateDefaults,
-  scanSoundSettings = DEFAULT_SCAN_SOUND,
-  onUpdateScanSound,
   onTestScanSound,
-  scanMatchingSettings = DEFAULT_SCAN_MATCHING,
-  onUpdateScanMatching,
-  modelPreference,
-  onUpdateModelPreference,
   detectorMode = 'unknown',
-  exportFormat,
-  onUpdateExportFormat,
   onUpdateCardDatabase,
   onUpdatePriceData,
   maintenanceBusy = false,
@@ -39,21 +31,28 @@ export default function SettingsTab({
   priceSourceDate = null,
   storageInfo = null,
   onOpenStorageFolder,
-  priceCurrency = 'EUR',
   priceExchangeRates = FALLBACK_ECB_EUR_RATES,
   priceExchangeRateDate = FALLBACK_EXCHANGE_RATE_DATE,
   priceExchangeRateFallback = false,
-  onUpdatePriceCurrency,
-  cameraProfile = 'auto',
-  onUpdateCameraProfile,
   cameraSettings,
   cameraDevices = [],
-  cameraDeviceId = '',
-  onUpdateCameraDeviceId,
   onRefreshCameraDevices,
   runtimeLabel = 'Browser build',
 }) {
   const scrollRef = useRef(null);
+  // The saved settings this screen shows and changes.
+  const [batchDefaults, onUpdateDefaults] = useSetting('batchDefaults');
+  const [scanSoundSettings, changeScanSound] = useSetting('scanSound');
+  const onUpdateScanSound = (patch) => changeScanSound(withPatch(patch));
+  const [scanMatchingSettings, changeScanMatching] = useSetting('scanMatching');
+  const onUpdateScanMatching = (patch) => changeScanMatching(withPatch(patch));
+  const [modelPreference, onUpdateModelPreference] = useSetting('detectorWeights');
+  const [exportFormat, onUpdateExportFormat] = useSetting('exportFormat');
+  const [priceCurrency, onUpdatePriceCurrency] = useSetting('priceCurrency');
+  const [cameraDeviceId, onUpdateCameraDeviceId] = useSetting('cameraDeviceId');
+  const [cameraProfiles, changeCameraProfiles] = useSetting('cameraProfiles');
+  const cameraProfile = cameraProfileOf(cameraProfiles, cameraDeviceId);
+  const onUpdateCameraProfile = (profile) => changeCameraProfiles((profiles) => withCameraProfile(profiles, cameraDeviceId, profile));
   const scanSound = normalizeScanSound(scanSoundSettings);
   const scanMatching = normalizeScanMatching(scanMatchingSettings);
   const scanMatchingIsDefault = scanMatching.minSimilarity === DEFAULT_SCAN_MATCHING.minSimilarity
@@ -301,7 +300,7 @@ export default function SettingsTab({
               className="range-slider" />
             <p className="mt-1 text-[10px] text-rift-500">How much better the best match must be than the second best. Default {percent(DEFAULT_SCAN_MATCHING.minSimilarityGap)}%.</p>
           </div>
-          <button type="button" onClick={() => onUpdateScanMatching?.(DEFAULT_SCAN_MATCHING)} disabled={!onUpdateScanMatching || scanMatchingIsDefault}
+          <button type="button" onClick={() => onUpdateScanMatching(DEFAULT_SCAN_MATCHING)} disabled={scanMatchingIsDefault}
             className="btn-ghost w-full rounded-xl text-sm py-2.5">
             <RotateCcw className="w-4 h-4" />Reset to defaults
           </button>
@@ -318,7 +317,7 @@ export default function SettingsTab({
             role="switch"
             aria-label="Scan success sound"
             aria-checked={scanSound.enabled}
-            onClick={() => onUpdateScanSound?.({ enabled: !scanSound.enabled })}
+            onClick={() => onUpdateScanSound({ enabled: !scanSound.enabled })}
             className={`w-full rounded-xl border px-3 py-2.5 text-sm flex items-center justify-between ${scanSound.enabled
               ? 'border-gold-400/40 bg-gold-400/10 text-gold-300'
               : 'border-rift-600/40 bg-rift-700/40 text-rift-300'}`}
@@ -331,7 +330,7 @@ export default function SettingsTab({
             </label>
             <input id="scan-sound-volume" aria-label="Scan sound volume" type="range" min="0" max="100" step="5"
               value={Math.round(scanSound.volume * 100)}
-              onChange={(event) => onUpdateScanSound?.({ volume: Number(event.target.value) / 100 })}
+              onChange={(event) => onUpdateScanSound({ volume: Number(event.target.value) / 100 })}
               className="range-slider" />
           </div>
           <button type="button" onClick={onTestScanSound} disabled={!onTestScanSound || scanSound.volume <= 0}

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { measureImageQuality, BestFrameBuffer, frameDifference, isReliableScanResult, getScanGuidance, isScanFrameCancelled } from '../src/lib/scanQuality.js';
 import { getScanGuide, getVideoScanRegion, selectGuideDetection, mapDetectionBox, getDetectorLetterbox } from '../src/lib/scanGeometry.js';
 import { openCameraStream, applyCameraAutoModes, supportsTorch, normalizeCameraProfile } from '../src/lib/cameraControls.js';
-import { createRuntime, componentProps } from './helpers/runtime.mjs';
+import { createRuntime, componentProps, nodes } from './helpers/runtime.mjs';
 import { normalizeScanMatching, DEFAULT_SCAN_MATCHING } from '../src/lib/scanMatching.js';
 import { buildRecognitionResult } from '../src/lib/cardRecognition.js';
 
@@ -322,22 +322,21 @@ test('parallel callers cannot start a second inference, and cancelled frames are
   assert.equal(fixture.matcherCalls, 0);
 });
 
-test('capture profiles are kept separately for each selected camera', () => {
+test('Settings changes the capture profile of the selected camera only', () => {
   const runtime = createRuntime({ storage: { riftbound_camera_profiles: { cameraA: 'balanced' } } });
-  const app = runtime.mount(runtime.load('src/App.jsx').default, [false]);
-  componentProps(app.render(), 'BottomTabBar').onTabChange('settings');
-  let settings = componentProps(app.render(), 'SettingsTab');
-  settings.onUpdateCameraDeviceId('cameraA');
-  settings = componentProps(app.render(), 'SettingsTab');
-  assert.equal(settings.cameraProfile, 'balanced');
-  settings.onUpdateCameraDeviceId('cameraB');
-  settings = componentProps(app.render(), 'SettingsTab');
-  assert.equal(settings.cameraProfile, 'auto');
-  settings.onUpdateCameraProfile('low-light');
-  settings = componentProps(app.render(), 'SettingsTab');
-  assert.equal(settings.cameraProfile, 'low-light');
-  settings.onUpdateCameraDeviceId('cameraA');
-  assert.equal(componentProps(app.render(), 'SettingsTab').cameraProfile, 'balanced');
+  const settings = runtime.load('src/lib/userSettings.js').getUserSettings();
+  const view = runtime.mount(runtime.load('src/components/settings/SettingsTab.jsx').default);
+  const props = { cameraDevices: [{ deviceId: 'cameraA', label: 'A' }, { deviceId: 'cameraB', label: 'B' }] };
+  const select = (match) => nodes(view.render(props), (node) => node.type === 'select' && match(node))[0].props;
+  const deviceSelect = () => select((node) => JSON.stringify(node.props.children).includes('System default camera'));
+  const profileSelect = () => select((node) => node.props['aria-label'] === 'Camera capture profile');
+  deviceSelect().onChange({ target: { value: 'cameraA' } });
+  assert.equal(profileSelect().value, 'balanced');
+  deviceSelect().onChange({ target: { value: 'cameraB' } });
+  assert.equal(profileSelect().value, 'auto');
+  profileSelect().onChange({ target: { value: 'low-light' } });
+  assert.deepEqual({ ...settings.read('cameraProfiles') }, { cameraA: 'balanced', cameraB: 'low-light' });
+  assert.equal(settings.read('cameraDeviceId'), 'cameraB');
 });
 
 test('Snap ranks a failed-quality card for review only, never for acceptance', async () => {
