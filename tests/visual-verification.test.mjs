@@ -207,7 +207,7 @@ test('distinct geometric identities may scan consecutively without the old one-s
   }finally{cleanups.forEach(fn=>fn?.());}
 });
 
-test('the camera hook skips OCR for fresh visual proof and reuses a detector box only once',async()=>{
+test('the scan module skips OCR for fresh visual proof and reuses a detector box only once',async()=>{
   let now=1000,detectCalls=0,textCalls=0,cancelDuringVerification=false;
   const motion={epoch:1},cards=[{...card,code:'RAD-099/167',set:'RAD'},{id:'other',name:'Other Card',code:'RAD-001/167',set:'RAD'}];
   const match={card:cards[0],similarity:.76,secondBestSim:.75,localStructureSimilarity:.8,
@@ -222,16 +222,18 @@ test('the camera hook skips OCR for fresh visual proof and reuses a detector box
   }});
   const {CardTextVerification}=runtime.load('src/lib/cardTextVerification.js');
   const verifier=new CardTextVerification({read:async()=>{textCalls++;throw new Error('OCR must not start');}});
-  const mounted=runtime.mount(runtime.load('src/hooks/useCardDetection.js').useCardDetection);
-  const detection=mounted.render({textVerifier:verifier,cropRefiner:()=>{throw new Error('No repeated geometry search');}});
-  const cleanups=mounted.runEffects();
+  const {CardVisualVerifier}=runtime.load('src/lib/cardVisualVerifier.js');const visualVerifier=new CardVisualVerifier();
+  const matcher={ready:true,revision:1,cards};
+  const scan=runtime.load('src/lib/cardScan.js').createCardScan({getDetector:()=>detector,getMatcher:()=>matcher,
+    getVisualVerifier:()=>visualVerifier,getLearnedReferences:()=>runtime.load('src/lib/learnedReferences.js').getLearnedReferences()});
+  const settings={setFilter:'all',minSimilarity:.9,minSimilarityGap:.05,textVerifier:verifier,cropRefiner:()=>{throw new Error('No repeated geometry search');}};
   const source=id=>({width:800,height:900,frameId:id,capturedAt:now-50,scanMotionEpoch:motion.epoch,scanMotionContext:motion});
+  const detection={detectSingleFrame:async capture=>(await scan.scanFrame(capture(),settings)).result};
   try{
-    await detection.initDetector('quantized');
     const first=await detection.detectSingleFrame(()=>source(1));assert.equal(first.matched,true);assert.equal(first.textVerification.status,'not-required');
     now+=250;const second=await detection.detectSingleFrame(()=>source(2));assert.equal(second.matched,true);assert.equal(second.timings.detectorReused,true);assert.equal(detectCalls,1);
     now+=250;const third=await detection.detectSingleFrame(()=>source(3));assert.equal(third.timings.detectorReused,false);assert.equal(detectCalls,2);assert.equal(textCalls,0);
     cancelDuringVerification=true;now+=250;
     assert.equal(await detection.detectSingleFrame(()=>source(4)),null,'Motion while the worker runs invalidates its late proof');
-  }finally{cleanups.forEach(fn=>fn?.());}
+  }finally{verifier.dispose?.();}
 });

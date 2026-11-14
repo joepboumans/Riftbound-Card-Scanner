@@ -1,24 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { getDetector, DetectorState } from '../lib/yoloDetector.js';
-import { CardTextIndex } from '../lib/cardTextIdentity.js';
 import { getMatcher } from '../lib/cardMatcher.js';
-import { recognizeCard, buildRecognitionResult, applyTextVerification, rankForReview, reviewCandidatesFor } from '../lib/cardRecognition.js';
-import { hasLocalArtworkSupport } from '../lib/localArtwork.js';
-import { selectGuideDetection, mapDetectionBox } from '../lib/scanGeometry.js';
-import { attachScanEvidence, attachScanArtwork } from '../lib/scanEvidence.js';
-import { describeScanArtwork, getLearnedReferences } from '../lib/learnedReferences.js';
-import { mergeLearnedCandidates } from '../lib/learnedCandidates.js';
-import { emitScanDiagnostic } from '../lib/scanDiagnostics.js';
-import { isScanFrameCancelled } from '../lib/scanQuality.js';
+import { getLearnedReferences } from '../lib/learnedReferences.js';
 import { CardVisualVerifier } from '../lib/cardVisualVerifier.js';
-import { hasStrongVisualProof, canReuseVisualBox } from '../lib/cardVisualProof.js';
+import { createCardScan } from '../lib/cardScan.js';
 
 /**
- * Hook for single-frame card detection (tap to scan).
- *
- * Orchestrates:
- *   1. YOLO detection on a captured frame
- *   2. Card matching on detected crops (via CardMatcher)
+ * React side of camera scanning: loads the detector, keeps the busy flag and
+ * the last thing the scanner saw. Everything between a frame and its result
+ * is the scan module (lib/cardScan.js).
  */
 export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, minSimilarityGap = 0.05, cropRefiner = null, textVerifier = null, recognitionContext = '', cameraIsActive = true } = {}) {
   const [detectorState, setDetectorState] = useState(DetectorState.UNLOADED);
@@ -28,44 +18,32 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
 
   const detectorRef = useRef(null);
   const busyRef = useRef(false);
-  const minSimilarityRef = useRef(minSimilarity);
-  const minSimilarityGapRef = useRef(minSimilarityGap);
-  const scanSetFilterRef = useRef(scanSetFilter);
-  const cropRefinerRef = useRef(cropRefiner);
-  const epochRef = useRef(0);
-  const textVerifierRef = useRef(textVerifier);
-  const textIndexRef = useRef(null);
   const visualVerifierRef = useRef(null);
-  const visualFollowupRef = useRef(null);
+  // The settings each scan uses, kept current between renders.
+  const settingsRef = useRef({ setFilter: scanSetFilter, minSimilarity, minSimilarityGap, cropRefiner, textVerifier });
+  const scanRef = useRef(null);
+  if (!scanRef.current) scanRef.current = createCardScan({ getDetector: () => detectorRef.current, getMatcher,
+    getVisualVerifier: () => visualVerifierRef.current, getLearnedReferences });
+  const scan = scanRef.current;
 
   const resetRecognition = useCallback(() => {
-    epochRef.current++;
-    visualFollowupRef.current = null;
-    textVerifierRef.current?.reset();
+    scan.reset();
+    settingsRef.current.textVerifier?.reset();
     setLastDetection(null);
-  }, []);
-
-  // Lower floor used only by auto-scan temporal voting.
-  const CANDIDATE_SIMILARITY_FLOOR = 0.62;
-  const TARGET_ASPECT_RATIO = 63 / 88;
-  const MAX_ASPECT_DEVIATION = 0.22;
+  }, [scan]);
 
   useEffect(() => {
-    scanSetFilterRef.current = scanSetFilter;
-    minSimilarityRef.current = minSimilarity;
-    minSimilarityGapRef.current = minSimilarityGap;
-    cropRefinerRef.current = cropRefiner;
-    textVerifierRef.current?.reset();
-    textVerifierRef.current = textVerifier;
-    epochRef.current++;
-  }, [scanSetFilter, minSimilarity, minSimilarityGap, cropRefiner, textVerifier, recognitionContext, cameraIsActive]);
-  useEffect(() => () => { epochRef.current++; textVerifierRef.current?.reset(); visualVerifierRef.current?.dispose(); visualVerifierRef.current=null; }, []);
+    settingsRef.current.textVerifier?.reset();
+    settingsRef.current = { setFilter: scanSetFilter, minSimilarity, minSimilarityGap, cropRefiner, textVerifier };
+    scan.reset();
+  }, [scan, scanSetFilter, minSimilarity, minSimilarityGap, cropRefiner, textVerifier, recognitionContext, cameraIsActive]);
+  useEffect(() => () => { scan.reset(); settingsRef.current.textVerifier?.reset(); visualVerifierRef.current?.dispose(); visualVerifierRef.current = null; }, [scan]);
 
   /**
    * Initialize the YOLO detector
    */
   const initDetector = useCallback(async (modelPreference = 'normal') => {
-    epochRef.current++;
+    scan.reset();
     try {
       const detector = getDetector();
       detectorRef.current = detector;
@@ -86,167 +64,28 @@ export function useCardDetection({ scanSetFilter = 'all', minSimilarity = 0.90, 
       setDetectorMode('error');
       throw error;
     }
-  }, []);
+  }, [scan]);
 
   /**
-   * Detect cards in a single frame (tap to scan).
-   * Captures one frame, runs YOLO + matching, returns result.
-   * `offerCandidates`: the frame's candidates are offered to the user (Choice
-   * strip), so learned references are merged into them. Snap review
-   * (`includeReview`) always offers them.
+   * Scans one captured frame. Returns the result to act on, null, or
+   * { skipped: true } when there was no fresh frame. Options: see scanFrame.
    */
   const detectSingleFrame = useCallback(async (captureFrame, options = {}) => {
     if (busyRef.current || !detectorRef.current || detectorRef.current.state !== DetectorState.READY) return null;
-    const matcher = getMatcher();
-    if (!matcher.ready) return null;
+    if (!getMatcher().ready) return null;
     const frame = captureFrame?.();
     if (!frame) return { skipped: true };
     busyRef.current = true;
     setIsProcessing(true);
-    const observedAt = Date.now();
-    const epoch = epochRef.current;
-    const matcherRevision = matcher.revision;
-    const observation = { observedAt, frameId: frame.frameId, capturedAt: frame.capturedAt ?? observedAt,
-      detectorModel:detectorRef.current.modelPreference, matcherRevision };
-    const publish = result => { setLastDetection(result);emitScanDiagnostic('observation',{result}); };
-    emitScanDiagnostic('processing-start',observation);
     try {
-      if (frame.scanMoving || ['too-dark', 'too-bright'].includes(frame.scanQuality?.issue)) {
-        visualFollowupRef.current = null;
-        textVerifierRef.current?.reset();
-        publish({ ...observation, matched: false, reason: frame.scanMoving ? 'moving' : frame.scanQuality.issue });
-        return null;
-      }
-      const recognize = (detection, visualOnly = false) => recognizeCard({ source: frame, detection, matcher,
-        setFilter: scanSetFilterRef.current, minSimilarity: minSimilarityRef.current,
-        textCorroboration:textVerifierRef.current?.getGeometryHint?.({frame,context:`${epoch}:${matcherRevision||0}`,capturedAt:observation.capturedAt}),
-        cropRefiner: cropRefinerRef.current, candidates: Boolean(textVerifierRef.current), visualOnly,
-        visualVerifier: cropRefinerRef.current || textVerifierRef.current ? visualVerifierRef.current : null });
-      let recognition, bestDetection, detectorReused = false, detectedAt = observedAt, detectorMs = 0, followupMissMs = 0;
-      const anchor = visualFollowupRef.current;visualFollowupRef.current = null;
-      if (canReuseVisualBox(anchor, frame, {epoch,revision:matcherRevision,now:observedAt})) {
-        const quick = await recognize(anchor.detection, true);
-        if (quick?.visualVerification?.status === 'verified' && quick.visualVerification.cardId === anchor.cardId) {
-          recognition = quick;bestDetection = anchor.detection;detectorReused = true;
-        }
-        else followupMissMs = Date.now() - observedAt;
-      }
-      if (!bestDetection) {
-        const detectorStart = Date.now();
-        const detections = await detectorRef.current.detect(frame,{allowProposals:Boolean(visualVerifierRef.current&&(cropRefinerRef.current||textVerifierRef.current))});
-        detectedAt=Date.now();
-        detectorMs = detectedAt - detectorStart;
-        emitScanDiagnostic('detector-result',{frameId:frame.frameId,count:detections.length,detectorMs});
-        bestDetection = selectGuideDetection(detections, frame.scanRegion?.guide);
-      } else emitScanDiagnostic('detector-followup',{frameId:frame.frameId,anchorFrameId:anchor.frameId});
-      if (isScanFrameCancelled(frame) || epoch !== epochRef.current || matcher.revision !== matcherRevision) return null;
-      if (!bestDetection) {
-        textVerifierRef.current?.reset();
-        publish({ ...observation, matched: false, reason: 'outside-guide' });
-        return null;
-      }
-      const box = mapDetectionBox(bestDetection.box, frame.scanRegion);
-      const base = { ...observation, box, confidence: bestDetection.confidence, matched: false,
-        ...(bestDetection.detectorProposal?{detectorProposal:true}:{}) };
-      const boxRatio = bestDetection.box.w / Math.max(1, bestDetection.box.h);
-      const normalizedRatio = Math.min(boxRatio, 1 / boxRatio);
-      if (Math.abs(normalizedRatio - TARGET_ASPECT_RATIO) > MAX_ASPECT_DEVIATION) {
-        publish({ ...base, reason: 'outside-guide' });
-        return null;
-      }
-      recognition ||= await recognize(bestDetection);
-      const recognizedAt=Date.now();
-      if (isScanFrameCancelled(frame) || epoch !== epochRef.current || matcher.revision !== matcherRevision) return null;
-      const quality = recognition.quality;
-      if (frame.scanMoving) { quality.acceptable = false; quality.issue = 'moving'; }
-      // The candidates shown to the user (Choice strip, Snap review), with
-      // learned references merged in when this frame offers candidates. Set
-      // after acceptance, which never sees them.
-      const showCandidates = (result, officialCandidates) => {
-        const artwork = describeScanArtwork({ crop: recognition.crop, quality, matcher,
-          outlined: !bestDetection.detectorProposal, areaSampling: recognition.artworkSampling === 'area' });
-        result.reviewCandidates = options.offerCandidates || options.includeReview
-          ? mergeLearnedCandidates(officialCandidates, { artwork, matcher,
-            references: getLearnedReferences().references(), setFilter: scanSetFilterRef.current })
-          : officialCandidates;
-        attachScanArtwork(result, artwork);
-      };
-      // Snap review still gets an outlined card that failed quality or matched
-      // nothing; its candidates are ranked for review, never for acceptance.
-      const withReviewCandidates = (result, rankCandidates) => {
-        if (!options.includeReview) return null;
-        showCandidates(result, rankCandidates());
-        return result;
-      };
-      if (!quality.acceptable) {
-        textVerifierRef.current?.reset();
-        const failed = { ...base, quality, reason: quality.issue };
-        const reviewed = withReviewCandidates(failed, () => rankForReview(recognition.crop, matcher, { setFilter: scanSetFilterRef.current }));
-        publish(failed);
-        return reviewed;
-      }
-      const matchResult = recognition.match;
-      if (!matchResult?.card) {
-        textVerifierRef.current?.reset();
-        const unmatched = { ...base, quality, reason: 'low-similarity' };
-        publish(unmatched);
-        return withReviewCandidates(unmatched, () => []);
-      }
-      let result = buildRecognitionResult(matchResult, quality, minSimilarityRef.current, { ...base,
-        visualVerification:recognition.visualVerification,
-        requiresTextConfirmation:recognition.requiresTextConfirmation,
-        cropMethod: recognition.cropMethod, artworkSampling: recognition.artworkSampling, geometryConflict: recognition.geometryConflict, trackingFingerprint: recognition.trackingFingerprint,
-        quad: recognition.refinement?.quad?.map((p) => ({ x: p.x + (frame.scanRegion?.x || 0), y: p.y + (frame.scanRegion?.y || 0) })),
-        rectificationStatus: recognition.refinement?.status || 'disabled', rectificationReason: recognition.refinement?.reason },
-        { minSimilarityGap: minSimilarityGapRef.current });
-      const verifier = textVerifierRef.current;
-      if (verifier) {
-        const filterKey = JSON.stringify(scanSetFilterRef.current);
-        if (textIndexRef.current?.cards !== matcher.cards || textIndexRef.current?.filterKey !== filterKey) {
-          verifier.reset();
-          // Read identity against the full database: a set filter must not hide
-          // clear text evidence that the physical card belongs to another set.
-          textIndexRef.current = { cards: matcher.cards, filterKey, index: new CardTextIndex(matcher.cards) };
-        }
-        const context = `${epoch}:${matcher.revision || 0}`;
-        const visualReady = hasStrongVisualProof(result);
-        const observedText = verifier.observe(result, recognition.textCrop, { frame, context, index: textIndexRef.current.index,
-          skipRead:visualReady,
-          alternativeCrops: recognition.alternateTextCrops,
-          candidates: matchResult.candidates, minSimilarity: minSimilarityRef.current });
-        const verification = visualReady && observedText.status === 'pending'
-          ? { ...observedText, status: 'not-required', reason: 'verified-artwork-geometry' } : observedText;
-        result = applyTextVerification(result, matchResult, verification);
-        result.recognitionEpoch = `${context}:${verification.trackId || 0}`;
-      }
-      else result.recognitionEpoch = `${epoch}:${matcherRevision}:${frame.scanMotionEpoch ?? 0}`;
-      if (!detectorReused && result.matched && hasStrongVisualProof(result)) visualFollowupRef.current = {
-        epoch,revision:matcherRevision,motionContext:frame.scanMotionContext,motionEpoch:frame.scanMotionEpoch,
-        frameId:frame.frameId,capturedAt:frame.capturedAt,cardId:result.cardData.id,
-        detection:{box:{...bestDetection.box},confidence:bestDetection.confidence,detectorProposal:bestDetection.detectorProposal} };
-      result.timings={detectorReused,detectorMs,followupMissMs,artworkMs:recognizedAt-detectedAt+followupMissMs,
-        frameMs:Date.now()-observedAt,sourceAgeMs:Date.now()-observation.capturedAt};
-      if (options.retainEvidence) attachScanEvidence(result, { frame,
-        candidates: (matchResult.candidates || [matchResult]).slice(0, 5).map(entry => ({
-          id: entry.card.id, name: entry.card.name, code: entry.card.code, similarity: entry.similarity,
-          colorSimilarity: entry.colorSimilarity, structureSimilarity: entry.structureSimilarity,
-          localStructureSimilarity: entry.localStructureSimilarity, alignedArtworkSimilarity: entry.alignedArtworkSimilarity,
-          artworkAlignment: entry.artworkAlignment, similarityGap: entry.similarity - (entry.secondBestSim ?? 0),
-        })) });
-      showCandidates(result, reviewCandidatesFor(matchResult));
-      publish(result);
-      if (result.matched || options.includeReview || (options.includeCandidate && (matchResult.similarity >= CANDIDATE_SIMILARITY_FLOOR || hasLocalArtworkSupport(matchResult)))) return result;
-      return null;
-    } catch (error) {
-      console.error('[Detection] Frame processing error:', error);
-      publish({ ...observation, matched: false, reason: 'low-similarity' });
-      emitScanDiagnostic('processing-error',{frameId:frame.frameId,error:String(error?.message||error)});
-      return null;
+      const { observation, result } = await scan.scanFrame(frame, settingsRef.current, options);
+      if (observation) setLastDetection(observation);
+      return result;
     } finally {
       busyRef.current = false;
       setIsProcessing(false);
     }
-  }, []);
+  }, [scan]);
 
   return {
     detectorState,
