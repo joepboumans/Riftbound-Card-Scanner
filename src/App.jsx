@@ -17,7 +17,7 @@ import { useCardDetection } from './hooks/useCardDetection.js';
 import { useAutoScan } from './hooks/useAutoScan.js';
 import { useScanSound } from './hooks/useScanSound.js';
 import { useNewPrintCheck } from './hooks/useNewPrintCheck.js';
-import { downloadCSV, copyDeckList, validateForExport, EXPORT_FORMATS } from './lib/csvExporter.js';
+import { downloadCSV, copyDeckList, validateForExport } from './lib/csvExporter.js';
 import { getMatcher, mergeCardDatabaseUpdate, sourceImageUrlOf } from './lib/cardMatcher.js';
 import { buildScanSetOptions, summarizeScanSetCoverage } from './lib/scanSets.js';
 import { isDesktopRuntime } from './lib/runtime.js';
@@ -25,9 +25,8 @@ import { invokeDesktopCommand } from './lib/desktopBridge.js';
 import { checkForAppUpdate, downloadAndInstallAppUpdate, relaunchApp } from './lib/appUpdater.js';
 import { fetchExchangeRatesFromEcb, fetchPriceSnapshotCsvFromGithub, importPriceSnapshotCsv, loadStoredPriceMeta, isPriceSnapshotCurrent, PRICE_SOURCE_LABEL, PRICE_SOURCE_URL } from './lib/priceSync.js';
 import { getPriceRecords } from './lib/indexedDB.js';
-import { FALLBACK_EXCHANGE_RATE_DATE, normalizeExchangeRates, normalizePriceCurrency } from './lib/priceFormat.js';
+import { FALLBACK_EXCHANGE_RATE_DATE, normalizeExchangeRates } from './lib/priceFormat.js';
 import { isFoilOnly } from './data/sampleCards.js';
-import { normalizeCameraProfile } from './lib/cameraControls.js';
 import { isReliableScanResult } from './lib/scanQuality.js';
 import { createUserConfirmedEntry, onUserConfirmed } from './lib/userConfirmation.js';
 import { getLearnedReferences } from './lib/learnedReferences.js';
@@ -36,28 +35,22 @@ import { fullNameOf } from './lib/cardData.js';
 import { createCardEntry, createEntryId, restoreCardEntries, mergeCardEntries } from './lib/collection.js';
 import { createPendingList, updatePendingList, refreshPendingList, isDuplicateAdd } from './lib/pendingList.js';
 import { persistUserSnapshot } from './lib/userStorage.js';
-import { SCAN_SOUND_STORAGE_KEY } from './lib/scanSound.js';
+import { getUserSettings, cameraProfileOf } from './lib/userSettings.js';
+import { useSetting } from './hooks/useSetting.js';
 import { CardRectifier } from './lib/cardRectifier.js';
 import { CardTextReader } from './lib/cardTextReader.js';
 import { CardTextVerification } from './lib/cardTextVerification.js';
-import { SCANNER_DEBUG_KEY, SCANNER_OVERLAY_KEY, SCANNER_DIAGNOSTICS_AVAILABLE, normalizeScannerExperiments } from './lib/scannerExperiments.js';
-import { SCAN_MATCHING_STORAGE_KEY, normalizeScanMatching } from './lib/scanMatching.js';
+import { SCANNER_DIAGNOSTICS_AVAILABLE, normalizeScannerExperiments } from './lib/scannerExperiments.js';
 import { saveAcceptedDebugScan } from './lib/debugScanCapture.js';
 import { useScanSessionRecording } from './hooks/useScanSessionRecording.js';
 import { emitScanDiagnostic } from './lib/scanDiagnostics.js';
 
 // ─── State persistence helpers ──────────────────────────────
+// The scanned cards. Saved user settings live in lib/userSettings.js.
 const STORAGE_KEYS = {
   SCANNED_CARDS: 'riftbound_scanned_cards',
   PENDING_CARDS: 'riftbound_pending_cards',
   RECENT_PENDING_SCAN_EVENTS: 'riftbound_recent_pending_scan_events',
-  BATCH_DEFAULTS: 'riftbound_batch_defaults',
-  MODEL_PREFERENCE: 'riftbound_model_preference',
-  EXPORT_FORMAT: 'riftbound_export_format',
-  SCAN_SET_FILTER: 'riftbound_scan_set_filter',
-  PRICE_CURRENCY: 'riftbound_price_currency',
-  CAMERA_DEVICE_ID: 'riftbound_camera_device_id',
-  CAMERA_PROFILES: 'riftbound_camera_profiles',
 };
 
 const SCAN_ADD_ANIMATION_MS = 980;
@@ -121,44 +114,20 @@ export default function App() {
   const [notification, setNotification] = useState(null);
   const [scanAddAnimation, setScanAddAnimation] = useState(null);
 
-  const [debugEnabled, setDebugEnabled] = useState(() => SCANNER_DIAGNOSTICS_AVAILABLE && loadFromStorage(SCANNER_DEBUG_KEY, false) === true);
-  const [scanOverlayEnabled, setScanOverlayEnabled] = useState(() => loadFromStorage(SCANNER_OVERLAY_KEY, true) === true);
-  const [scanMatching, setScanMatching] = useState(() => normalizeScanMatching(loadFromStorage(SCAN_MATCHING_STORAGE_KEY, null)));
+  const [debugEnabled, setDebugEnabled] = useSetting('scannerDebug');
+  const [scanOverlayEnabled, setScanOverlayEnabled] = useSetting('scanOverlay');
+  const [scanMatching] = useSetting('scanMatching');
   const [debugCapture, setDebugCapture] = useState({ status: 'idle' });
   const lastDebugAcceptedRef = useRef(null);
   const debugSaveQueueRef = useRef(null);
   if (SCANNER_DIAGNOSTICS_AVAILABLE && !debugSaveQueueRef.current) debugSaveQueueRef.current = new ScanDebugQueue(pendingCount => setDebugCapture(previous => ({ ...previous, pendingCount })));
   const [scanCameraVisible, setScanCameraVisible] = useState(true);
 
-  // Batch defaults
-  const [batchDefaults, setBatchDefaults] = useState(() =>
-    loadFromStorage(STORAGE_KEYS.BATCH_DEFAULTS, {
-      condition: 'Near Mint',
-      language: 'English',
-      foil: false,
-    })
-  );
-
-  // Model preference (normal or quantized)
-  const [modelPreference, setModelPreference] = useState(() =>
-    loadFromStorage(STORAGE_KEYS.MODEL_PREFERENCE, 'quantized')
-  );
-
-  const [exportFormat, setExportFormat] = useState(() =>
-    loadFromStorage(STORAGE_KEYS.EXPORT_FORMAT, EXPORT_FORMATS.CARDNEXUS)
-  );
-
-  const [scanSetFilter, setScanSetFilter] = useState(() => {
-    const stored = loadFromStorage(STORAGE_KEYS.SCAN_SET_FILTER, []);
-    if (Array.isArray(stored)) {
-      return stored
-        .map((value) => String(value || '').trim().toUpperCase())
-        .filter((value) => value && value !== 'ALL');
-    }
-
-    const normalized = String(stored || '').trim().toUpperCase();
-    return normalized && normalized !== 'ALL' ? [normalized] : [];
-  });
+  const [batchDefaults] = useSetting('batchDefaults');
+  // Detector model: normal or quantized.
+  const [modelPreference] = useSetting('modelPreference');
+  const [exportFormat] = useSetting('exportFormat');
+  const [scanSetFilter, setScanSetFilter] = useSetting('scanSetFilter');
   const [scanSetOptions, setScanSetOptions] = useState([{ value: 'all', label: 'All sets' }]);
   // Each card database load also refreshes saved entries' card data by id.
   const applyCardDatabase = useCallback((cards) => {
@@ -173,16 +142,11 @@ export default function App() {
   const [updateTask, setUpdateTask] = useState(null);
   const [priceSyncMeta, setPriceSyncMeta] = useState(null);
   const [priceRecords, setPriceRecords] = useState([]);
-  const [priceCurrency, setPriceCurrency] = useState(() =>
-    normalizePriceCurrency(loadFromStorage(STORAGE_KEYS.PRICE_CURRENCY, 'EUR'))
-  );
-  const [cameraDeviceId, setCameraDeviceId] = useState(() =>
-    loadFromStorage(STORAGE_KEYS.CAMERA_DEVICE_ID, '')
-  );
+  const [priceCurrency] = useSetting('priceCurrency');
+  const [cameraDeviceId, setCameraDeviceId] = useSetting('cameraDeviceId');
   const [cameraDevices, setCameraDevices] = useState([]);
-  const [cameraProfiles, setCameraProfiles] = useState(() => loadFromStorage(STORAGE_KEYS.CAMERA_PROFILES, {}));
-  const cameraProfileKey = cameraDeviceId || 'default';
-  const cameraProfile = normalizeCameraProfile(cameraProfiles?.[cameraProfileKey]);
+  const [cameraProfiles] = useSetting('cameraProfiles');
+  const cameraProfile = cameraProfileOf(cameraProfiles, cameraDeviceId);
 
   // ─── Hooks ─────────────────────────────────────────────────
   // Recognition features start enabled, including profiles saved with the old
@@ -193,9 +157,6 @@ export default function App() {
     if (!rectifierRef.current) rectifierRef.current = new CardRectifier();
     return rectifierRef.current.refine(source, box);
   }, []);
-  useEffect(() => { if(SCANNER_DIAGNOSTICS_AVAILABLE)saveToStorage(SCANNER_DEBUG_KEY, debugEnabled); }, [debugEnabled]);
-  useEffect(() => { saveToStorage(SCANNER_OVERLAY_KEY, scanOverlayEnabled); }, [scanOverlayEnabled]);
-  useEffect(() => { saveToStorage(SCAN_MATCHING_STORAGE_KEY, scanMatching); }, [scanMatching]);
   useEffect(() => {
     if (!scannerExperiments.perspective) { rectifierRef.current?.dispose(); rectifierRef.current = null; }
     return () => { rectifierRef.current?.dispose(); rectifierRef.current = null; };
@@ -247,17 +208,6 @@ export default function App() {
     [STORAGE_KEYS.SCANNED_CARDS]: scannedCards,
     [STORAGE_KEYS.PENDING_CARDS]: pendingCards,
     [STORAGE_KEYS.RECENT_PENDING_SCAN_EVENTS]: recentPendingScanEvents,
-    [STORAGE_KEYS.BATCH_DEFAULTS]: batchDefaults,
-    [STORAGE_KEYS.MODEL_PREFERENCE]: modelPreference,
-    [STORAGE_KEYS.EXPORT_FORMAT]: exportFormat,
-    [STORAGE_KEYS.SCAN_SET_FILTER]: scanSetFilter,
-    [STORAGE_KEYS.PRICE_CURRENCY]: priceCurrency,
-    [STORAGE_KEYS.CAMERA_DEVICE_ID]: cameraDeviceId,
-    [STORAGE_KEYS.CAMERA_PROFILES]: cameraProfiles,
-    [SCAN_SOUND_STORAGE_KEY]: scanSound.settings,
-    [SCANNER_DEBUG_KEY]: debugEnabled,
-    [SCANNER_OVERLAY_KEY]: scanOverlayEnabled,
-    [SCAN_MATCHING_STORAGE_KEY]: scanMatching,
   };
 
   useEffect(() => {
@@ -282,18 +232,6 @@ export default function App() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.PRICE_CURRENCY, priceCurrency);
-  }, [priceCurrency]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.CAMERA_DEVICE_ID, cameraDeviceId);
-  }, [cameraDeviceId]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.CAMERA_PROFILES, cameraProfiles);
-  }, [cameraProfiles]);
 
   const refreshCameraDevices = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) {
@@ -732,7 +670,7 @@ export default function App() {
       }, { beforeInstall: async () => {
         camera.stopCamera();
         await yieldToPaint();
-        persistUserSnapshot(userSnapshotRef.current);
+        persistUserSnapshot({ ...getUserSettings().snapshot(), ...userSnapshotRef.current });
       } });
 
       setAppUpdateState((previous) => ({
@@ -798,22 +736,6 @@ export default function App() {
   }, [recentPendingScanEvents]);
 
   useEffect(() => {
-    saveToStorage(STORAGE_KEYS.BATCH_DEFAULTS, batchDefaults);
-  }, [batchDefaults]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.MODEL_PREFERENCE, modelPreference);
-  }, [modelPreference]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.EXPORT_FORMAT, exportFormat);
-  }, [exportFormat]);
-
-  useEffect(() => {
-    saveToStorage(STORAGE_KEYS.SCAN_SET_FILTER, scanSetFilter);
-  }, [scanSetFilter]);
-
-  useEffect(() => {
     if (scanSetFilter.length === 0) return;
 
     const availableSets = new Set(scanSetOptions.filter((option) => option.value !== 'all').map((option) => option.value));
@@ -830,9 +752,6 @@ export default function App() {
         saveToStorage(STORAGE_KEYS.SCANNED_CARDS, scannedCards);
         saveToStorage(STORAGE_KEYS.PENDING_CARDS, pendingCards);
         saveToStorage(STORAGE_KEYS.RECENT_PENDING_SCAN_EVENTS, recentPendingScanEvents);
-        saveToStorage(STORAGE_KEYS.BATCH_DEFAULTS, batchDefaults);
-        saveToStorage(STORAGE_KEYS.MODEL_PREFERENCE, modelPreference);
-        saveToStorage(STORAGE_KEYS.EXPORT_FORMAT, exportFormat);
       }
     };
 
@@ -840,9 +759,6 @@ export default function App() {
       saveToStorage(STORAGE_KEYS.SCANNED_CARDS, scannedCards);
       saveToStorage(STORAGE_KEYS.PENDING_CARDS, pendingCards);
       saveToStorage(STORAGE_KEYS.RECENT_PENDING_SCAN_EVENTS, recentPendingScanEvents);
-      saveToStorage(STORAGE_KEYS.BATCH_DEFAULTS, batchDefaults);
-      saveToStorage(STORAGE_KEYS.MODEL_PREFERENCE, modelPreference);
-      saveToStorage(STORAGE_KEYS.EXPORT_FORMAT, exportFormat);
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -854,7 +770,7 @@ export default function App() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handleBeforeUnload);
     };
-  }, [scannedCards, pendingCards, recentPendingScanEvents, batchDefaults, modelPreference, exportFormat]);
+  }, [scannedCards, pendingCards, recentPendingScanEvents]);
 
   // ─── Refs for use in callbacks without stale closures ──
   const batchDefaultsRef = useRef(batchDefaults);
@@ -1222,21 +1138,11 @@ export default function App() {
 
         {activeTab === 'settings' && (
           <SettingsTab
-            batchDefaults={batchDefaults}
-            onUpdateDefaults={setBatchDefaults}
-            scanSoundSettings={scanSound.settings}
-            onUpdateScanSound={scanSound.updateSettings}
-            scanMatchingSettings={scanMatching}
-            onUpdateScanMatching={(patch) => setScanMatching(previous => normalizeScanMatching({ ...previous, ...patch }))}
             onTestScanSound={async () => {
               const played = await scanSound.testSound();
               showNotification(played ? 'Test sound played' : 'Sound unavailable. Check your audio output and volume.', played ? 'success' : 'info');
             }}
-            modelPreference={modelPreference}
-            onUpdateModelPreference={setModelPreference}
             detectorMode={detection.detectorMode}
-            exportFormat={exportFormat}
-            onUpdateExportFormat={setExportFormat}
             onUpdateCardDatabase={handleUpdateCardDatabase}
             onUpdatePriceData={handleImportPriceSnapshot}
             maintenanceBusy={priceSyncBusy || cardDatabaseBusy || appUpdateBusy}
@@ -1256,17 +1162,11 @@ export default function App() {
               try { await invokeDesktopCommand('open_storage_folder', { folder }); }
               catch (error) { showNotification(String(error?.message || error), 'error'); }
             }}
-            priceCurrency={priceCurrency}
             priceExchangeRates={priceExchangeRates}
             priceExchangeRateDate={priceExchangeRateDate}
             priceExchangeRateFallback={priceExchangeRateFallback}
-            onUpdatePriceCurrency={setPriceCurrency}
-            cameraProfile={cameraProfile}
-            onUpdateCameraProfile={(profile) => setCameraProfiles((previous) => ({ ...previous, [cameraProfileKey]: normalizeCameraProfile(profile) }))}
             cameraSettings={camera.settings}
             cameraDevices={cameraDevices}
-            cameraDeviceId={cameraDeviceId}
-            onUpdateCameraDeviceId={setCameraDeviceId}
             onRefreshCameraDevices={refreshCameraDevices}
             runtimeLabel={runtimeInfo ? `Desktop shell (${runtimeInfo.platform}/${runtimeInfo.arch})` : (isDesktopRuntime() ? 'Desktop shell' : 'Browser build')}
           />
