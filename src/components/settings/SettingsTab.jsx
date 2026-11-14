@@ -2,8 +2,8 @@ import React, { useRef } from 'react';
 import { Shield, Sparkles, RotateCcw, Info, ExternalLink, Cpu, Download, Database, Search, RefreshCcw, Camera, Volume2, ScanLine } from 'lucide-react';
 import { CONDITIONS, LANGUAGES } from '../../data/sampleCards.js';
 import { EXPORT_FORMAT_OPTIONS } from '../../lib/csvExporter.js';
-import { CAMERA_PROFILES } from '../../lib/cameraControls.js';
-import { cameraProfileOf, withCameraProfile } from '../../lib/userSettings.js';
+import { CAMERA_PROFILES, cameraProfileOf, withCameraProfile } from '../../lib/cameraControls.js';
+import { withPatch } from '../../lib/userSettings.js';
 import { useSetting } from '../../hooks/useSetting.js';
 import { normalizeScanSound } from '../../lib/scanSound.js';
 import { DEFAULT_SCAN_MATCHING, SCAN_MATCHING_LIMITS, normalizeScanMatching } from '../../lib/scanMatching.js';
@@ -43,10 +43,10 @@ export default function SettingsTab({
   // The saved settings this screen shows and changes.
   const [batchDefaults, onUpdateDefaults] = useSetting('batchDefaults');
   const [scanSoundSettings, changeScanSound] = useSetting('scanSound');
-  const onUpdateScanSound = (patch) => changeScanSound((previous) => ({ ...previous, ...patch }));
+  const onUpdateScanSound = (patch) => changeScanSound(withPatch(patch));
   const [scanMatchingSettings, changeScanMatching] = useSetting('scanMatching');
-  const onUpdateScanMatching = (patch) => changeScanMatching((previous) => ({ ...previous, ...patch }));
-  const [modelPreference, onUpdateModelPreference] = useSetting('modelPreference');
+  const onUpdateScanMatching = (patch) => changeScanMatching(withPatch(patch));
+  const [modelPreference, onUpdateModelPreference] = useSetting('detectorWeights');
   const [exportFormat, onUpdateExportFormat] = useSetting('exportFormat');
   const [priceCurrency, onUpdatePriceCurrency] = useSetting('priceCurrency');
   const [cameraDeviceId, onUpdateCameraDeviceId] = useSetting('cameraDeviceId');
@@ -317,7 +317,7 @@ export default function SettingsTab({
             role="switch"
             aria-label="Scan success sound"
             aria-checked={scanSound.enabled}
-            onClick={() => onUpdateScanSound?.({ enabled: !scanSound.enabled })}
+            onClick={() => onUpdateScanSound({ enabled: !scanSound.enabled })}
             className={`w-full rounded-xl border px-3 py-2.5 text-sm flex items-center justify-between ${scanSound.enabled
               ? 'border-gold-400/40 bg-gold-400/10 text-gold-300'
               : 'border-rift-600/40 bg-rift-700/40 text-rift-300'}`}
@@ -330,7 +330,7 @@ export default function SettingsTab({
             </label>
             <input id="scan-sound-volume" aria-label="Scan sound volume" type="range" min="0" max="100" step="5"
               value={Math.round(scanSound.volume * 100)}
-              onChange={(event) => onUpdateScanSound?.({ volume: Number(event.target.value) / 100 })}
+              onChange={(event) => onUpdateScanSound({ volume: Number(event.target.value) / 100 })}
               className="range-slider" />
           </div>
           <button type="button" onClick={onTestScanSound} disabled={!onTestScanSound || scanSound.volume <= 0}

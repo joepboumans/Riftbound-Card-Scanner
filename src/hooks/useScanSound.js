@@ -6,7 +6,7 @@ import { useSetting } from './useSetting.js';
 const currentSettings = () => getUserSettings().read('scanSound');
 
 export function useScanSound() {
-  const [settings, changeSettings] = useSetting('scanSound');
+  const [settings] = useSetting('scanSound');
   const playerRef = useRef(null);
   if (!playerRef.current) playerRef.current = new ScanSoundPlayer();
 
@@ -29,10 +29,6 @@ export function useScanSound() {
 
   useEffect(() => () => playerRef.current.dispose(), []);
 
-  const updateSettings = useCallback((patch) => {
-    changeSettings((previous) => ({ ...previous, ...patch }));
-  }, [changeSettings]);
-
   const playScanAccepted = useCallback(() => {
     const { enabled, volume } = currentSettings();
     return enabled && playerRef.current.play(volume);
@@ -43,5 +39,5 @@ export function useScanSound() {
     return playerRef.current.play(currentSettings().volume);
   }, []);
 
-  return { settings, updateSettings, playScanAccepted, testSound };
+  return { playScanAccepted, testSound };
 }

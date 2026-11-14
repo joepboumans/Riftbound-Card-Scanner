@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createUserSettings, cameraProfileOf, withCameraProfile } from '../src/lib/userSettings.js';
+import { createUserSettings } from '../src/lib/userSettings.js';
+import { cameraProfileOf, withCameraProfile } from '../src/lib/cameraControls.js';
 import { DEFAULT_SCAN_MATCHING } from '../src/lib/scanMatching.js';
 
 // An in-memory stand-in for localStorage. `raw` holds text stored as is.
@@ -13,7 +14,7 @@ const stored = (storage, key) => JSON.parse(storage.values.get(key));
 test('a fresh install gets the default for every setting', () => {
   const settings = createUserSettings({ storage: memoryStorage(), diagnostics: true });
   assert.deepEqual(settings.read('batchDefaults'), { condition: 'Near Mint', language: 'English', foil: false });
-  assert.equal(settings.read('modelPreference'), 'quantized');
+  assert.equal(settings.read('detectorWeights'), 'quantized');
   assert.equal(settings.read('exportFormat'), 'cardnexus');
   assert.deepEqual(settings.read('scanSetFilter'), []);
   assert.equal(settings.read('priceCurrency'), 'EUR');
@@ -41,7 +42,7 @@ test('settings saved by an earlier version load with identical values under the 
   });
   const settings = createUserSettings({ storage, diagnostics: true });
   assert.deepEqual(settings.read('batchDefaults'), { condition: 'Damaged', language: 'Chinese', foil: true });
-  assert.equal(settings.read('modelPreference'), 'normal');
+  assert.equal(settings.read('detectorWeights'), 'normal');
   assert.equal(settings.read('exportFormat'), 'piltover');
   assert.deepEqual(settings.read('scanSetFilter'), ['OGN', 'RAD']);
   assert.equal(settings.read('priceCurrency'), 'USD');
@@ -74,7 +75,7 @@ test('stored values are cleaned up on load and written back cleaned', () => {
 
 test('an unreadable stored value falls back to the default', () => {
   const settings = createUserSettings({ storage: memoryStorage({}, { riftbound_model_preference: '{not json' }) });
-  assert.equal(settings.read('modelPreference'), 'quantized');
+  assert.equal(settings.read('detectorWeights'), 'quantized');
 });
 
 test('a change is normalized, saved straight away and announced', () => {
@@ -87,6 +88,8 @@ test('a change is normalized, saved straight away and announced', () => {
   assert.equal(stored(storage, 'riftbound_price_currency'), 'USD');
   settings.change('scanMatching', (previous) => ({ ...previous, minSimilarity: 0.5 }));
   assert.deepEqual(settings.read('scanMatching'), { ...DEFAULT_SCAN_MATCHING, minSimilarity: 0.68 });
+  settings.change('priceCurrency', 'USD');
+  assert.equal(heard.length, 2, 'the same value again changes nothing');
   stop();
   settings.change('exportFormat', 'piltover');
   assert.deepEqual(heard, [['priceCurrency', 'USD'], ['scanMatching', { ...DEFAULT_SCAN_MATCHING, minSimilarity: 0.68 }]]);
@@ -96,8 +99,8 @@ test('a storage failure keeps the change for this session', (t) => {
   t.mock.method(console, 'warn', () => {});
   const storage = { getItem: () => null, setItem() { throw new Error('Quota'); } };
   const settings = createUserSettings({ storage });
-  settings.change('modelPreference', 'normal');
-  assert.equal(settings.read('modelPreference'), 'normal');
+  settings.change('detectorWeights', 'normal');
+  assert.equal(settings.read('detectorWeights'), 'normal');
 });
 
 test('outside development the scanner debug setting is always off and never saved', () => {

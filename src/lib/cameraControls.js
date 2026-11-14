@@ -8,6 +8,17 @@ export function normalizeCameraProfile(profile) {
   return CAMERA_PROFILES.some((item) => item.value === profile) ? profile : 'auto';
 }
 
+// Each camera keeps its own capture profile; the system default camera is 'default'.
+const cameraKey = (deviceId) => deviceId || 'default';
+
+export function cameraProfileOf(profiles, deviceId) {
+  return normalizeCameraProfile(profiles?.[cameraKey(deviceId)]);
+}
+
+export function withCameraProfile(profiles, deviceId, profile) {
+  return { ...profiles, [cameraKey(deviceId)]: normalizeCameraProfile(profile) };
+}
+
 export async function openCameraStream(mediaDevices, { deviceId, facingMode, profile }) {
   const target = CAMERA_PROFILES.find((item) => item.value === normalizeCameraProfile(profile));
   const identity = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: facingMode || 'environment' } };

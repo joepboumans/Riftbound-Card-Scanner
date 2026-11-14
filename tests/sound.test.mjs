@@ -70,7 +70,7 @@ test('sound controls persist and an existing acceptance callback uses the latest
   let sound=view.render();const cleanups=view.runEffects();
   assert.equal(contexts.length,0);gestures.get('pointerdown')();await Promise.resolve();
   const accept=sound.playScanAccepted;assert.equal(accept(),true);
-  sound.updateSettings({enabled:false,volume:0.25});sound=view.render();view.runEffects();
+  runtime.load('src/lib/userSettings.js').getUserSettings().change('scanSound',{enabled:false,volume:0.25});sound=view.render();view.runEffects();
   assert.equal(accept(),false);
   assert.deepEqual(JSON.parse(runtime.values.get(SCAN_SOUND_STORAGE_KEY)),{enabled:false,volume:0.25});
   assert.equal(await sound.testSound(),true); // Explicit previews work while automatic sound is muted.

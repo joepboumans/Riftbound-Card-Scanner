@@ -1,11 +1,11 @@
 import { EXPORT_FORMATS } from './csvExporter.js';
 import { normalizePriceCurrency } from './priceFormat.js';
-import { normalizeCameraProfile } from './cameraControls.js';
 import { SCAN_SOUND_STORAGE_KEY, normalizeScanSound } from './scanSound.js';
 import { SCAN_MATCHING_STORAGE_KEY, normalizeScanMatching } from './scanMatching.js';
 import { SCANNER_DEBUG_KEY, SCANNER_OVERLAY_KEY, SCANNER_DIAGNOSTICS_AVAILABLE } from './scannerExperiments.js';
 
 const keep = (value) => value;
+const onlyTrue = (value) => value === true;
 
 function normalizeSetFilter(value) {
   const codes = Array.isArray(value) ? value : [value];
@@ -17,15 +17,16 @@ function normalizeSetFilter(value) {
 // `diagnostics: true` settings exist only in development builds.
 const SETTINGS = {
   batchDefaults: { key: 'riftbound_batch_defaults', defaultValue: { condition: 'Near Mint', language: 'English', foil: false }, normalize: keep },
-  modelPreference: { key: 'riftbound_model_preference', defaultValue: 'quantized', normalize: keep },
+  // Which detector weights to load: 'normal' or 'quantized'.
+  detectorWeights: { key: 'riftbound_model_preference', defaultValue: 'quantized', normalize: keep },
   exportFormat: { key: 'riftbound_export_format', defaultValue: EXPORT_FORMATS.CARDNEXUS, normalize: keep },
   scanSetFilter: { key: 'riftbound_scan_set_filter', defaultValue: [], normalize: normalizeSetFilter },
   priceCurrency: { key: 'riftbound_price_currency', defaultValue: 'EUR', normalize: normalizePriceCurrency },
   cameraDeviceId: { key: 'riftbound_camera_device_id', defaultValue: '', normalize: keep },
   cameraProfiles: { key: 'riftbound_camera_profiles', defaultValue: {}, normalize: keep },
   scanSound: { key: SCAN_SOUND_STORAGE_KEY, defaultValue: null, normalize: normalizeScanSound },
-  scannerDebug: { key: SCANNER_DEBUG_KEY, defaultValue: false, normalize: (value) => value === true, diagnostics: true },
-  scanOverlay: { key: SCANNER_OVERLAY_KEY, defaultValue: true, normalize: (value) => value === true },
+  scannerDebug: { key: SCANNER_DEBUG_KEY, defaultValue: false, normalize: onlyTrue, diagnostics: true },
+  scanOverlay: { key: SCANNER_OVERLAY_KEY, defaultValue: true, normalize: onlyTrue },
   scanMatching: { key: SCAN_MATCHING_STORAGE_KEY, defaultValue: null, normalize: normalizeScanMatching },
 };
 
@@ -43,7 +44,8 @@ function load(storage, { key, defaultValue }) {
  *
  *   read(name)             the current value
  *   change(name, next)     `next` is the new value or a function of the
- *                          current one; the result is cleaned up and saved
+ *                          current one; the result is cleaned up and saved.
+ *                          Setting the very same value again does nothing
  *   subscribe(listener)    listener(name, value) after each change; returns
  *                          a function that stops listening
  *   snapshot()             { storageKey: value } for every setting, for the
@@ -82,6 +84,7 @@ export function createUserSettings({ storage = globalThis.localStorage, diagnost
       const definition = definitionOf(name);
       if (!available(definition)) return;
       const value = definition.normalize(typeof next === 'function' ? next(values.get(name)) : next);
+      if (Object.is(value, values.get(name))) return;
       values.set(name, value);
       save(definition, value);
       for (const listener of listeners) listener(name, value);
@@ -101,11 +104,5 @@ export function getUserSettings() {
   return userSettings;
 }
 
-// Each camera keeps its own capture profile; the default camera is 'default'.
-export function cameraProfileOf(profiles, deviceId) {
-  return normalizeCameraProfile(profiles?.[deviceId || 'default']);
-}
-
-export function withCameraProfile(profiles, deviceId, profile) {
-  return { ...profiles, [deviceId || 'default']: normalizeCameraProfile(profile) };
-}
+// For change(): merges `patch` into an object setting such as scanSound.
+export const withPatch = (patch) => (previous) => ({ ...previous, ...patch });

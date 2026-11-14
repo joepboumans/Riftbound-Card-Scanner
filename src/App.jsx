@@ -35,7 +35,8 @@ import { fullNameOf } from './lib/cardData.js';
 import { createCardEntry, createEntryId, restoreCardEntries, mergeCardEntries } from './lib/collection.js';
 import { createPendingList, updatePendingList, refreshPendingList, isDuplicateAdd } from './lib/pendingList.js';
 import { persistUserSnapshot } from './lib/userStorage.js';
-import { getUserSettings, cameraProfileOf } from './lib/userSettings.js';
+import { getUserSettings } from './lib/userSettings.js';
+import { cameraProfileOf } from './lib/cameraControls.js';
 import { useSetting } from './hooks/useSetting.js';
 import { CardRectifier } from './lib/cardRectifier.js';
 import { CardTextReader } from './lib/cardTextReader.js';
@@ -124,8 +125,7 @@ export default function App() {
   const [scanCameraVisible, setScanCameraVisible] = useState(true);
 
   const [batchDefaults] = useSetting('batchDefaults');
-  // Detector model: normal or quantized.
-  const [modelPreference] = useSetting('modelPreference');
+  const [modelPreference] = useSetting('detectorWeights');
   const [exportFormat] = useSetting('exportFormat');
   const [scanSetFilter, setScanSetFilter] = useSetting('scanSetFilter');
   const [scanSetOptions, setScanSetOptions] = useState([{ value: 'all', label: 'All sets' }]);
@@ -670,7 +670,7 @@ export default function App() {
       }, { beforeInstall: async () => {
         camera.stopCamera();
         await yieldToPaint();
-        persistUserSnapshot({ ...getUserSettings().snapshot(), ...userSnapshotRef.current });
+        persistUserSnapshot({ ...userSnapshotRef.current, ...getUserSettings().snapshot() });
       } });
 
       setAppUpdateState((previous) => ({
