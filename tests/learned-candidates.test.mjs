@@ -105,11 +105,11 @@ async function detectWith(references, ranked, options = { includeCandidate: true
     'src/lib/indexedDB.js': { loadLearnedReferences: async () => references, writeLearnedReferences: async () => {} },
   } });
   await runtime.load('src/lib/learnedReferences.js').getLearnedReferences().settled();
-  const hook = runtime.mount(runtime.load('src/hooks/useCardDetection.js').useCardDetection);
-  await hook.render({ minSimilarity: 0.9, textVerifier }).initDetector();
+  const scan = runtime.load('src/lib/cardScan.js').createCardScan({ getDetector: () => detector, getMatcher: () => liveMatcher,
+    getLearnedReferences: () => runtime.load('src/lib/learnedReferences.js').getLearnedReferences() });
   const frame = { width: 800, height: 900, frameId: 1, capturedAt: Date.now(),
     scanRegion: { x: 400, y: 100, guide: { x: 100, y: 100, width: 300, height: 500 } } };
-  const result = await hook.render({ minSimilarity: 0.9, textVerifier }).detectSingleFrame(() => frame, options);
+  const { result } = await scan.scanFrame(frame, { setFilter: 'all', minSimilarity: 0.9, minSimilarityGap: 0.05, textVerifier }, options);
   return Object.assign(result, { featureReads: liveMatcher.featureReads });
 }
 
