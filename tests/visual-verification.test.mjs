@@ -55,7 +55,7 @@ test('unique alternate rune art uses global printing geometry; shared art and hi
         return {id:c.id,inliers:scenario==='shared'&&c.id===foreign.id?60:3,
           maxInliers:scenario==='other-mask'&&c.id===base.id?55:3};
       })};};
-    const result=await verifier.verify({width:630,height:880},{matcher:{cards:all,
+    const result=await verifier.verify({width:630,height:880},{matcher:{references:all,
       rank:(_crop,options)=>options.requiredIds?family:ranked},setFilter:['RAD'],frameId:1});
     assert.equal(requests.length,2);
     assert.ok(requests[1].candidates.some(c=>c.id===foreign.id));
@@ -134,7 +134,7 @@ test('same-name printings require actual geometry against every hidden rival; id
   const all=[...ranked,{card:alternate,similarity:.7,secondBestSim:.8}];
   const runtime=createRuntime({globals:{document:{createElement:()=>({getContext:()=>({drawImage(){},getImageData:()=>({data:new Uint8ClampedArray(4)})})})}}});
   const {CardVisualVerifier}=runtime.load('src/lib/cardVisualVerifier.js');
-  const matcher={cards:[base,alternate,background],rank:(_crop,options)=>options.requiredIds?all:ranked};
+  const matcher={references:[base,alternate,background],rank:(_crop,options)=>options.requiredIds?all:ranked};
   for(const [rival,expected] of [[4,'verified'],[60,'unconfirmed'],[null,'unconfirmed']]){
     const verifier=new CardVisualVerifier();verifier.ready=true;const requests=[];
     verifier.request=async data=>{requests.push(data);return {workerMs:10,comparisons:data.candidates.filter(c=>rival!==null||c.id!==alternate.id).map(c=>
@@ -217,13 +217,12 @@ test('the scan module skips OCR for fresh visual proof and reuses a detector box
   const runtime=createRuntime({globals:{Date:class extends Date{static now(){return now;}},Worker:function(){},
     document:{createElement:()=>({width:300,height:420,getContext:()=>({translate(){},rotate(){},drawImage(){},getImageData:()=>({width:64,height:88,data})})})}},mocks:{
     'src/lib/yoloDetector.js':{getDetector:()=>detector,DetectorState:{READY:'ready',UNLOADED:'unloaded',LOADING:'loading',ERROR:'error'}},
-    'src/lib/cardMatcher.js':{getMatcher:()=>({ready:true,revision:1,cards})},
     'src/lib/cardVisualVerifier.js':{CardVisualVerifier:class{ensureReady(){return Promise.resolve(true);}dispose(){}async verify(_crop,{frameId}){if(cancelDuringVerification)motion.epoch++;return {proof:proof(frameId),match};}}},
   }});
   const {CardTextVerification}=runtime.load('src/lib/cardTextVerification.js');
   const verifier=new CardTextVerification({read:async()=>{textCalls++;throw new Error('OCR must not start');}});
   const {CardVisualVerifier}=runtime.load('src/lib/cardVisualVerifier.js');const visualVerifier=new CardVisualVerifier();
-  const matcher={ready:true,revision:1,cards};
+  const matcher={ready:true,revision:1,references:cards};
   const scan=runtime.load('src/lib/cardScan.js').createCardScan({getDetector:()=>detector,getMatcher:()=>matcher,
     getVisualVerifier:()=>visualVerifier,getLearnedReferences:()=>runtime.load('src/lib/learnedReferences.js').getLearnedReferences()});
   const settings={setFilter:'all',minSimilarity:.9,minSimilarityGap:.05,textVerifier:verifier,cropRefiner:()=>{throw new Error('No repeated geometry search');}};

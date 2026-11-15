@@ -19,24 +19,23 @@ function fixture(local, bundled, { fetchError, saveError } = {}) {
       return { ok: true, json: async () => bundled };
     }, console: { ...console, warn() {} } },
   });
-  const Matcher = runtime.load('src/lib/cardMatcher.js').default;
-  return { matcher: new Matcher(), saved };
+  return { database: runtime.load('src/lib/cardDatabase.js').createCardDatabase(), saved };
 }
 
 test('a bundled update supplements later reveals inside an already imported set', async () => {
-  const { matcher, saved } = fixture(
+  const { database, saved } = fixture(
     { gridSize: 16, cards: [card('rad-001', { imageUrl: 'C:/cards/local.webp' })] },
     { gridSize: 16, cards: [card('rad-001'), card('rad-219'), card('ven-001')] },
   );
-  await matcher.initialize();
-  assert.deepEqual(Array.from(matcher.cards, (c) => c.id), ['rad-001', 'rad-219', 'ven-001']);
-  assert.equal(matcher.cards[0].imageUrl, 'C:/cards/local.webp');
-  assert.equal(matcher.databaseUpdatedAt, 'new');
+  await database.load();
+  assert.deepEqual(Array.from(database.cards, (c) => c.id), ['rad-001', 'rad-219', 'ven-001']);
+  assert.equal(database.cards[0].imageUrl, 'C:/cards/local.webp');
+  assert.equal(database.updatedAt, 'new');
   assert.equal(saved.length, 1);
 });
 
 const GALLERY_IMAGE = 'https://cmsassets.rgpub.io/sanity/images/kaisa.png';
-const supplement = (local, bundled) => createRuntime().load('src/lib/cardMatcher.js').supplementWithBundledCards(local, bundled);
+const supplement = (local, bundled) => createRuntime().load('src/lib/cardDatabase.js').supplementWithBundledCards(local, bundled);
 
 test('a bundled top-up overwrites metadata of an existing card and keeps its local features', () => {
   const local = card('rad-005', { name: "Kai'Sa", subtitle: '', text: 'Old text', imageUrl: 'C:/cards/rad-005.webp', sourceImageUrl: GALLERY_IMAGE, f: [0.9, 0.9, 0.9] });
@@ -69,51 +68,51 @@ test('a local card absent from the bundled database is kept', () => {
 
 test('a current local database is not rewritten at every startup', async () => {
   const db = { gridSize: 16, cards: [card('rad-001')] };
-  const { matcher, saved } = fixture(db, db);
-  await matcher.initialize();
+  const { database, saved } = fixture(db, db);
+  await database.load();
   assert.equal(saved.length, 0);
-  assert.equal(matcher.databaseUpdatedAt, 'old');
+  assert.equal(database.updatedAt, 'old');
 });
 
 test('incompatible feature grids are not mixed', async () => {
-  const { matcher, saved } = fixture({ gridSize: 8, cards: [card('ogn-001')] }, { gridSize: 16, cards: [card('rad-001')] });
-  await matcher.initialize();
-  assert.equal(matcher.gridSize, 8);
-  assert.equal(matcher.cards.length, 1);
+  const { database, saved } = fixture({ gridSize: 8, cards: [card('ogn-001')] }, { gridSize: 16, cards: [card('rad-001')] });
+  await database.load();
+  assert.equal(database.gridSize, 8);
+  assert.equal(database.cards.length, 1);
   assert.equal(saved.length, 0);
 });
 
 test('missing bundled data retains the usable local database', async () => {
-  const { matcher } = fixture({ gridSize: 16, cards: [card('rad-001')] }, null, { fetchError: true });
-  await matcher.initialize();
-  assert.equal(matcher.ready, true);
-  assert.equal(matcher.cards[0].id, 'rad-001');
+  const { database } = fixture({ gridSize: 16, cards: [card('rad-001')] }, null, { fetchError: true });
+  await database.load();
+  assert.equal(database.ready, true);
+  assert.equal(database.cards[0].id, 'rad-001');
 });
 
 test('storage failure still makes new bundled cards available for this session', async () => {
-  const { matcher } = fixture({ gridSize: 16, cards: [] }, { gridSize: 16, cards: [card('rad-001')] }, { saveError: true });
-  await matcher.initialize();
-  assert.equal(matcher.ready, true);
-  assert.equal(matcher.cards[0].id, 'rad-001');
-  assert.equal(matcher.databaseUpdatedAt, 'old');
+  const { database } = fixture({ gridSize: 16, cards: [] }, { gridSize: 16, cards: [card('rad-001')] }, { saveError: true });
+  await database.load();
+  assert.equal(database.ready, true);
+  assert.equal(database.cards[0].id, 'rad-001');
+  assert.equal(database.updatedAt, 'old');
 });
 
 test('a new installation uses the bundled database without a local import', async () => {
-  const { matcher, saved } = fixture(null, { gridSize: 16, cards: [card('rad-001')] });
-  await matcher.initialize();
-  assert.equal(matcher.cards[0].id, 'rad-001');
-  assert.equal(matcher.databaseSource, 'bundled');
+  const { database, saved } = fixture(null, { gridSize: 16, cards: [card('rad-001')] });
+  await database.load();
+  assert.equal(database.cards[0].id, 'rad-001');
+  assert.equal(database.source, 'bundled');
   assert.equal(saved.length, 0);
 });
 
 test('an unreadable local payload falls back to bundled cards', async () => {
-  const { matcher } = fixture({ gridSize: 16, cards: {} }, { gridSize: 16, cards: [card('rad-001')] });
-  await matcher.initialize();
-  assert.equal(matcher.cards[0].id, 'rad-001');
-  assert.equal(matcher.databaseSource, 'bundled');
+  const { database } = fixture({ gridSize: 16, cards: {} }, { gridSize: 16, cards: [card('rad-001')] });
+  await database.load();
+  assert.equal(database.cards[0].id, 'rad-001');
+  assert.equal(database.source, 'bundled');
 });
 
-const mergeUpdate = (existing, update) => createRuntime().load('src/lib/cardMatcher.js').mergeCardDatabaseUpdate(existing, update);
+const mergeUpdate = (existing, update) => createRuntime().load('src/lib/cardDatabase.js').mergeCardDatabaseUpdate(existing, update);
 
 test('an in-app update refreshes metadata and keeps local features and image path', () => {
   const existing = { gridSize: 16, cards: [card('rad-001', { text: 'Old text', imageUrl: 'C:/cards/rad-001.webp', f: [0.9, 0.9, 0.9] })] };
@@ -136,4 +135,104 @@ test('an in-app update replaces re-hashed cards, adds new ones and keeps cards m
 test('an in-app metadata refresh for an unknown card is not added without features', () => {
   const merged = mergeUpdate({ gridSize: 16, cards: [] }, { gridSize: 16, cards: [{ id: 'rad-001', text: 'Text' }] });
   assert.equal(merged.cards.length, 0);
+});
+
+// An update source that answers from memory, as the desktop gallery update would.
+function memoryUpdateSource(changes, progress = []) {
+  const asked = [];
+  return { asked, async fetch({ knownCards, gridSize, onProgress }) {
+    asked.push({ knownCards, gridSize });
+    for (const step of progress) onProgress(step);
+    return changes;
+  } };
+}
+
+test('an update sends the known cards, merges the changes, saves and tells subscribers', async () => {
+  const local = { gridSize: 16, cards: [
+    card('rad-001', { text: 'Old text', imageUrl: 'C:/cards/rad-001.webp', sourceImageUrl: GALLERY_IMAGE }),
+    card('rad-999', { imageUrl: 'https://cmsassets.rgpub.io/sanity/images/retired.png' })] };
+  const { database, saved } = fixture(local, local);
+  await database.load();
+  const heard = [];
+  database.subscribe((current) => heard.push(current.cards.map((c) => c.id)));
+  const progress = [];
+  const source = memoryUpdateSource({ gridSize: 16, skippedCards: 2, cards: [
+    { id: 'rad-001', set: 'RAD', text: 'New text', sourceImageUrl: GALLERY_IMAGE }, card('rad-002')] },
+  [{ percent: 0.5, message: 'Hashing' }]);
+  const savesBefore = saved.length;
+  let mergedBeforeSave = false;
+  const result = await database.update(source, { onProgress: (step) => progress.push(step),
+    onMerged: () => { mergedBeforeSave = saved.length === savesBefore; } });
+  assert.deepEqual(JSON.parse(JSON.stringify(source.asked)), [{ gridSize: 16, knownCards: [
+    { id: 'rad-001', sourceImageUrl: GALLERY_IMAGE },
+    { id: 'rad-999', sourceImageUrl: 'https://cmsassets.rgpub.io/sanity/images/retired.png' }] }]);
+  assert.equal(progress[0].message, 'Hashing');
+  assert.equal(mergedBeforeSave, true);
+  assert.deepEqual({ ...result }, { count: 3, skippedCards: 2 });
+  assert.deepEqual(Array.from(database.cards, (c) => c.id), ['rad-001', 'rad-999', 'rad-002'], 'a card missing from the update is kept');
+  assert.equal(database.cards[0].text, 'New text');
+  assert.equal(database.cards[0].imageUrl, 'C:/cards/rad-001.webp');
+  assert.equal(saved.length, savesBefore + 1);
+  assert.equal(database.source, 'local');
+  assert.equal(database.updatedAt, 'new');
+  assert.deepEqual(JSON.parse(JSON.stringify(heard)), [['rad-001', 'rad-999', 'rad-002']]);
+});
+
+test('a failed update changes nothing', async () => {
+  const local = { gridSize: 16, cards: [card('rad-001')] };
+  const { database, saved } = fixture(local, local);
+  await database.load();
+  const revision = database.revision;
+  const failing = { fetch: async () => { throw new Error('Offline'); } };
+  await assert.rejects(database.update(failing), /Offline/);
+  assert.equal(database.revision, revision);
+  assert.equal(saved.length, 0);
+});
+
+test('a card-hashes.json file replaces the card database; an invalid file is refused', async () => {
+  const { database, saved } = fixture(null, { gridSize: 16, cards: [card('rad-001')] });
+  await database.load();
+  await assert.rejects(database.replaceFromFile('{"cards":[]}'), /does not look like a valid card-hashes.json/);
+  await assert.rejects(database.replaceFromFile('not json'));
+  assert.equal(saved.length, 0);
+  const count = await database.replaceFromFile(JSON.stringify({ gridSize: 16, cards: [card('ogn-001'), card('ogn-002')] }));
+  assert.equal(count, 2);
+  assert.deepEqual(Array.from(database.cards, (c) => c.id), ['ogn-001', 'ogn-002']);
+  assert.equal(database.source, 'local');
+});
+
+test('every change bumps the revision and reaches subscribers until they stop listening', async () => {
+  const { database } = fixture(null, { gridSize: 16, cards: [card('rad-001')] });
+  const revisions = [];
+  const stop = database.subscribe((current) => revisions.push(current.revision));
+  await database.load();
+  await database.replace({ gridSize: 16, cards: [card('rad-002')] });
+  stop();
+  await database.replace({ gridSize: 16, cards: [card('rad-003')] });
+  assert.deepEqual(revisions, [1, 2]);
+  assert.equal(database.revision, 3);
+});
+
+test('the matcher follows the card database: every change becomes its official references', async () => {
+  const runtime = createRuntime();
+  const database = runtime.load('src/lib/cardDatabase.js').createCardDatabase();
+  database._apply({ gridSize: 1, cards: [card('rad-001')] });
+  const Matcher = runtime.load('src/lib/cardMatcher.js').default;
+  const matcher = new Matcher(database);
+  assert.equal(matcher.ready, true, 'a matcher created after loading catches up');
+  assert.deepEqual(Array.from(matcher.references, (c) => c.id), ['rad-001']);
+  assert.ok(matcher.references[0].featureStats, 'references carry the prepared fingerprint');
+  assert.equal(database.cards[0].featureStats, undefined, 'the card database keeps plain card records');
+  database._apply({ gridSize: 1, cards: [card('rad-002')] });
+  assert.deepEqual(Array.from(matcher.references, (c) => c.id), ['rad-002']);
+  assert.equal(matcher.revision, database.revision);
+  assert.equal(matcher.officialFeatures('rad-002').length, 3);
+  assert.equal('cards' in matcher, false);
+});
+
+test('a local copy saved by an earlier version loads without the matcher fields it stored', async () => {
+  const legacy = card('rad-001', { featureStats: { norm: 1 }, localArtwork: [1], broadArtwork: [2] });
+  const { database } = fixture({ gridSize: 16, cards: [legacy] }, null, { fetchError: true });
+  await database.load();
+  assert.deepEqual(Object.keys(database.cards[0]).filter((key) => /Artwork|featureStats/.test(key)), []);
 });

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ChevronDown, Plus, Minus, CheckSquare, Square, Trash2, Sparkles, Search, X, Hand } from 'lucide-react';
 import { DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from '../../data/sampleCards.js';
-import { getMatcher, resolveCardImageSource } from '../../lib/cardMatcher.js';
+import { getCardDatabase, resolveCardImageSource } from '../../lib/cardDatabase.js';
 import { formatPrice, getPriceValue } from '../../lib/priceFormat.js';
 import CardImage from '../CardImage.jsx';
 import { codeLabelOf, fullNameOf, resolveCardData } from '../../lib/cardData.js';
@@ -95,7 +95,7 @@ export default function CardDetailPanel({
 
   // Search all cards by full name, printed name or code, from 2 characters on
   const searchResults = searchOpen && searchQuery.trim().length >= 2
-    ? searchCards(getMatcher().cards, searchQuery).slice(0, 8)
+    ? searchCards(getCardDatabase().cards, searchQuery).slice(0, 8)
     : [];
 
   // Auto-focus search input when opened and scroll into view

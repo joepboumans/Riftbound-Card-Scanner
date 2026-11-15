@@ -1,4 +1,4 @@
-import { getMatcher } from './cardMatcher.js';
+import { getCardDatabase } from './cardDatabase.js';
 import { getPriceRecord, loadPriceSyncMeta, replacePriceSnapshot } from './indexedDB.js';
 import { FALLBACK_EXCHANGE_RATE_DATE, FALLBACK_ECB_EUR_RATES, normalizeExchangeRates } from './priceFormat.js';
 
@@ -311,7 +311,7 @@ export function buildPriceSnapshot(csvText, cards) {
 }
 
 export async function importPriceSnapshotCsv(csvText, options = {}) {
-  const cards = options.cards || (options.matcher || getMatcher()).cards || [];
+  const cards = options.cards || getCardDatabase().cards || [];
   const { records, ...statistics } = buildPriceSnapshot(csvText, cards);
   const exchangeRate = await resolveExchangeRates(options);
   const exchangeRates = normalizeExchangeRates(exchangeRate.exchangeRates);

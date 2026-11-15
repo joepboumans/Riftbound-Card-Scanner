@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import CardImage from '../CardImage.jsx';
-import { resolveCardImageSource } from '../../lib/cardMatcher.js';
+import { resolveCardImageSource } from '../../lib/cardDatabase.js';
 import { fullNameOf } from '../../lib/cardData.js';
 import { CHOICE_STRIP_HOLD_MS, CHOICE_STRIP_INITIAL, choiceStripReducer, choiceStripView } from '../../lib/userConfirmation.js';
 import { useChoiceKeys } from '../../hooks/useChoiceKeys.js';

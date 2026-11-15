@@ -157,11 +157,11 @@ export function createCardScan({ getDetector, getMatcher, getVisualVerifier = ()
         { minSimilarityGap });
       if (textVerifier) {
         const filterKey = JSON.stringify(setFilter);
-        if (textIndex?.cards !== matcher.cards || textIndex?.filterKey !== filterKey) {
+        if (textIndex?.cards !== matcher.references || textIndex?.filterKey !== filterKey) {
           textVerifier.reset();
           // Read identity against the full database: a set filter must not hide
           // clear text evidence that the physical card belongs to another set.
-          textIndex = { cards: matcher.cards, filterKey, index: new CardTextIndex(matcher.cards) };
+          textIndex = { cards: matcher.references, filterKey, index: new CardTextIndex(matcher.references) };
         }
         const context = `${scanEpoch}:${matcher.revision || 0}`;
         const visualReady = hasStrongVisualProof(result);
@@ -270,7 +270,7 @@ export async function scanPhoto(image, { original = image, detector, matcher, se
     if (textVerifier && matchResult?.card) {
       textVerification = await textVerifier.verifyPhoto(recognition.textCrop, { hint: matchResult.card,
         alternativeCrops: recognition.alternateTextCrops,
-        index: new CardTextIndex(matcher.cards), frameId: `${photoId}-${results.length}` });
+        index: new CardTextIndex(matcher.references), frameId: `${photoId}-${results.length}` });
       if (!isCurrent()) return null;
       const result = applyTextVerification(recognitionResult, matchResult, textVerification, { photo: true });
       recognitionResult = result;

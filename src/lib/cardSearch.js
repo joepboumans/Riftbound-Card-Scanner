@@ -1,4 +1,4 @@
-import { filterCardsBySet } from './cardMatcher.js';
+import { filterCardsBySet } from './cardDatabase.js';
 import { compareByFullName } from './cardData.js';
 
 const searchFields = (card) => [card.fullName, card.name, card.id, card.code, card.set, card.setName, card.collectorNumber, String(card.number || '')];

@@ -151,7 +151,7 @@ function photoFixture({ ranked = [{ card: { id: 'match', name: 'Match', code: 'F
   const runtime = createRuntime({ globals: { document: { createElement: () => ({ width: 0, height: 0, getContext: () => context }) } } });
   const { scanPhoto } = runtime.load('src/lib/cardScan.js');
   const detector = { state: ready, detect: async () => detections };
-  const matcher = { ready: true, cards: ranked.map((entry) => entry.card), rankCalls: 0,
+  const matcher = { ready: true, references: ranked.map((entry) => entry.card), rankCalls: 0,
     rank: () => { matcher.rankCalls++; return ranked; } };
   const image = { naturalWidth: 400, naturalHeight: 600 };
   const original = { naturalWidth: 800, naturalHeight: 1200 };

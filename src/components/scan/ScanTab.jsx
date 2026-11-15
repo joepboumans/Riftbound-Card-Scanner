@@ -9,6 +9,7 @@ import CardDetailPanel from '../identify/CardDetailPanel.jsx';
 import { scanPhoto } from '../../lib/cardScan.js';
 import { getDetector } from '../../lib/yoloDetector.js';
 import { getMatcher } from '../../lib/cardMatcher.js';
+import { getCardDatabase } from '../../lib/cardDatabase.js';
 import { downloadCSV, copyDeckList, exportFileType, validateForExport, EXPORT_FORMATS } from '../../lib/csvExporter.js';
 import { formatPrice, getPriceValue as getRecordPriceValue } from '../../lib/priceFormat.js';
 import { isFoilOnly } from '../../data/sampleCards.js';
@@ -169,8 +170,8 @@ export default function ScanTab({
     [pendingCards, recentPendingScanEvents]);
 
   const manualCardResults = useMemo(() => {
-    const matcher = getMatcher();
-    return matcher.ready ? searchCards(matcher.cards, manualCardQuery, scanSetFilter) : [];
+    const cardDatabase = getCardDatabase();
+    return cardDatabase.ready ? searchCards(cardDatabase.cards, manualCardQuery, scanSetFilter) : [];
   }, [manualCardQuery, scanSetFilter]);
 
   const manualSelectedFoilOnly = manualSelectedCard ? isFoilOnly(manualSelectedCard) : false;

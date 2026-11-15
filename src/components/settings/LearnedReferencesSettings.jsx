@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Brain, Download, Upload, Trash2 } from 'lucide-react';
-import { getMatcher } from '../../lib/cardMatcher.js';
+import { getCardDatabase } from '../../lib/cardDatabase.js';
 import { getLearnedReferences, summarizeLearnedReferences } from '../../lib/learnedReferences.js';
 
 // Settings "Learned references": counts, Export backup, Import and Clear all.
-// None of these bump `matcher.revision`.
+// None of these change the card database or its revision.
 export default function LearnedReferencesSettings() {
   const learned = getLearnedReferences();
   const fileInputRef = useRef(null);
@@ -13,14 +13,14 @@ export default function LearnedReferencesSettings() {
 
   const refresh = async () => {
     await learned.settled();
-    const matcher = getMatcher();
-    setSummary(summarizeLearnedReferences(learned.references(), { cards: matcher.cards, gridSize: matcher.gridSize }));
+    const cardDatabase = getCardDatabase();
+    setSummary(summarizeLearnedReferences(learned.references(), { cards: cardDatabase.cards, gridSize: cardDatabase.gridSize }));
   };
   useEffect(() => { refresh(); }, []);
 
   const exportBackup = async () => {
     await learned.settled();
-    const backup = learned.exportBackup({ gridSize: getMatcher().gridSize });
+    const backup = learned.exportBackup({ gridSize: getCardDatabase().gridSize });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([JSON.stringify(backup)], { type: 'application/json' }));
     link.download = `riftbound-learned-references-${new Date().toISOString().slice(0, 10)}.json`;

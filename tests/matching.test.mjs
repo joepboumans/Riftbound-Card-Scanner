@@ -78,18 +78,20 @@ test('blank and invalid inputs never produce a confident artwork score', () => {
 });
 
 function matcherFixture() {
-  const Matcher = createRuntime().load('src/lib/cardMatcher.js').default;
-  const matcher = new Matcher();
-  matcher._applyDatabase({ gridSize: 2, cards: [
+  const runtime = createRuntime();
+  const Matcher = runtime.load('src/lib/cardMatcher.js').default;
+  const database = runtime.load('src/lib/cardDatabase.js').createCardDatabase();
+  const matcher = new Matcher(database);
+  database._apply({ gridSize: 2, cards: [
     { id: 'correct', set: 'RAD', f: pattern }, { id: 'similar-colors', set: 'OGN', f: rearranged },
   ] });
   matcher._cropArtwork = (canvas) => canvas;
   matcher._computeColorGrid = () => pattern;
-  return matcher;
+  return { matcher, database };
 }
 
 test('camera top-two and photo ranking use one score, with set filtering', () => {
-  const matcher = matcherFixture();
+  const { matcher } = matcherFixture();
   const result = matcher.identify({});
   const ranked = matcher.rank({}, { limit: 3 });
   assert.equal(result.card.id, 'correct');
@@ -100,8 +102,8 @@ test('camera top-two and photo ranking use one score, with set filtering', () =>
 });
 
 test('identical artwork variants stay ambiguous under the new score', () => {
-  const matcher = matcherFixture();
-  matcher._applyDatabase({ gridSize: 2, cards: [
+  const { matcher, database } = matcherFixture();
+  database._apply({ gridSize: 2, cards: [
     { id: 'a', set: 'RAD', f: pattern }, { id: 'b', set: 'RAD', f: pattern },
   ] });
   const result = matcher.identify({});
@@ -129,8 +131,7 @@ test('debug view names an ambiguous candidate without calling it accepted', () =
 
 test('manual card search retains set filtering after sharing photo matching', () => {
   const runtime = createRuntime();
-  const matcher = runtime.load('src/lib/cardMatcher.js').getMatcher();
-  matcher._applyDatabase({ gridSize: 2, cards: [
+  runtime.load('src/lib/cardDatabase.js').getCardDatabase()._apply({ gridSize: 2, cards: [
     { id: 'rad-099-167', name: 'Suave Negotiator', set: 'RAD', f: pattern },
     { id: 'other-set', name: 'Suave Other Set', set: 'OGN', f: rearranged },
   ] });

@@ -109,7 +109,7 @@ test('an ECB outage does not discard a valid downloaded price update', async () 
     if (url.includes('ecb.europa.eu')) throw new Error('ECB unavailable');
     return {ok:true,text:async () => header + baseRow};
   }, console:{...console,warn(){}}} });
-  runtime.load('src/lib/cardMatcher.js').getMatcher()._applyDatabase({gridSize:16,cards:[{...anchor,f:[1,2,3]}]});
+  runtime.load('src/lib/cardDatabase.js').getCardDatabase()._apply({gridSize:16,cards:[{...anchor,f:[1,2,3]}]});
   const app = runtime.mount(runtime.load('src/App.jsx').default,[false]);
   componentProps(app.render(),'BottomTabBar').onTabChange('settings');
   await componentProps(app.render(),'SettingsTab').onUpdatePriceData();

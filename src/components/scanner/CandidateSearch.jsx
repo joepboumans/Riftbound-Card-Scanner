@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import CardImage from '../CardImage.jsx';
-import { getMatcher, resolveCardImageSource } from '../../lib/cardMatcher.js';
+import { getCardDatabase, resolveCardImageSource } from '../../lib/cardDatabase.js';
 import { fullNameOf, resolveCardData } from '../../lib/cardData.js';
 import { searchCards } from '../../lib/cardSearch.js';
 
@@ -9,8 +9,8 @@ import { searchCards } from '../../lib/cardSearch.js';
 export default function CandidateSearch({ setFilter = 'all', onPick, onClose }) {
   const [query, setQuery] = useState('');
   const results = useMemo(() => {
-    const matcher = getMatcher();
-    return matcher.ready ? searchCards(matcher.cards, query, setFilter) : [];
+    const cardDatabase = getCardDatabase();
+    return cardDatabase.ready ? searchCards(cardDatabase.cards, query, setFilter) : [];
   }, [query, setFilter]);
 
   useEffect(() => {

@@ -6,7 +6,7 @@
 // get it accepted.
 import { resolveCardData } from './cardData.js';
 import { compareFeatures } from './cardSimilarity.js';
-import { filterCardsBySet } from './cardMatcher.js';
+import { filterCardsBySet } from './cardDatabase.js';
 import { isUsableLearnedReference } from './learnedReferences.js';
 
 export const SHOWN_CANDIDATES = 3;
@@ -29,11 +29,11 @@ function rankLearnedReferences(features, references, cardsById) {
  *
  * @param {object[]} candidates - official shown candidates, best first
  * @param {{ artwork: { features(): ArrayLike<number> }, references: object[],
- *   matcher: { cards: object[], gridSize: number }, setFilter?: string|string[] }} options
+ *   matcher: { references: object[], gridSize: number }, setFilter?: string|string[] }} options
  */
 export function mergeLearnedCandidates(candidates = [], { artwork, references = [], matcher, setFilter } = {}) {
-  if (!references.length || !artwork || !matcher?.cards?.length) return candidates;
-  const cardsById = new Map(filterCardsBySet(matcher.cards, setFilter).map((card) => [card.id, card]));
+  if (!references.length || !artwork || !matcher?.references?.length) return candidates;
+  const cardsById = new Map(filterCardsBySet(matcher.references, setFilter).map((card) => [card.id, card]));
   const usable = references.filter((reference) =>
     isUsableLearnedReference(reference, { cardIds: cardsById, gridSize: matcher.gridSize }));
   // The scan's artwork is read only when a learned reference can use it.
