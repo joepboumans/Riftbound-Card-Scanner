@@ -1,4 +1,4 @@
-import { resolveCardImageSource, filterCardsBySet } from './cardMatcher.js';
+import { resolveCardImageSource, filterCardsBySet } from './cardDatabase.js';
 import { resolveAppUrl } from './runtime.js';
 import { matchFromRanking } from './cardRecognition.js';
 import { selectVisualProof, visualIdentityAmbiguities, strongVisualGeometry } from './cardVisualProof.js';
@@ -33,7 +33,7 @@ export class CardVisualVerifier {
   async verify(crop,{matcher,setFilter,frameId}={}){
     if(!this.ready){void this.ensureReady();return {proof:{status:'unavailable',reason:'visual-worker-loading'}};}
     if(this.pending)return {proof:{status:'unavailable',reason:'visual-worker-busy'}};
-    if(this.cards!==matcher.cards){this.cards=matcher.cards;this.ambiguities.clear();}
+    if(this.cards!==matcher.officialReferences){this.cards=matcher.officialReferences;this.ambiguities.clear();}
     // One cheap global search replaces repeated local alignment/homography
     // searches only AFTER independent keypoint geometry has verified identity.
     let ranked=matcher.rank(crop,{setFilter,limit:8,areaSampling:true,localStructure:true,alignLocal:false});
@@ -57,7 +57,7 @@ export class CardVisualVerifier {
     const winner=ranked.find(entry=>entry.card.id===best?.id);
     if(!winner)return {proof:{status:'unconfirmed',reason:'no-visual-match'}};
     if(winner.card.type==='rune'){
-      const family=matcher.cards.filter(card=>card.type==='rune'&&normalizeCardName(card.name)===normalizeCardName(winner.card.name));
+      const family=matcher.officialReferences.filter(card=>card.type==='rune'&&normalizeCardName(card.name)===normalizeCardName(winner.card.name));
       if(family.length>12)return {proof:{status:'unconfirmed',reason:'rune-family-too-large'}};
       const familyRanked=matcher.rank(crop,{requiredIds:family.map(c=>c.id),areaSampling:true,localStructure:false});
       const runeReply=await compare(familyRanked,true);
@@ -68,7 +68,7 @@ export class CardVisualVerifier {
       const identityProof=selectVisualProof(runeReply.comparisons,{frameId,uniqueIdentity:proof.completeFamily});
       const identity=familyRanked.find(entry=>entry.card.id===identityProof.cardId);
       if(identityProof.status==='verified'&&identity&&allowed.has(identity.card.id)&&
-        visualIdentityAmbiguities(identity.card,matcher.cards).every(id=>family.some(card=>card.id===id))){
+        visualIdentityAmbiguities(identity.card,matcher.officialReferences).every(id=>family.some(card=>card.id===id))){
         const runner=Math.max(0,...runeReply.comparisons.filter(c=>c.id!==identity.card.id).map(c=>c.maxInliers??c.inliers),
           ...reply.comparisons.filter(c=>c.id!==identity.card.id).map(c=>c.inliers));
         if(identityProof.inliers-runner>=20&&identityProof.inliers>=Math.max(1,runner)*2){
@@ -81,7 +81,7 @@ export class CardVisualVerifier {
         (runeReply.comparisons.find(c=>c.id===b.card.id)?.inliers||0)-(runeReply.comparisons.find(c=>c.id===a.card.id)?.inliers||0));
       return {proof,runeMatch:entries.some(entry=>proof.candidates.find(c=>c.cardId===entry.card.id)?.verified)?matchFromRanking(entries):null};
     }
-    if(!this.ambiguities.has(winner.card.id))this.ambiguities.set(winner.card.id,visualIdentityAmbiguities(winner.card,matcher.cards));
+    if(!this.ambiguities.has(winner.card.id))this.ambiguities.set(winner.card.id,visualIdentityAmbiguities(winner.card,matcher.officialReferences));
     const ambiguousIds=this.ambiguities.get(winner.card.id);
     let verifiedReply=reply,verifiedRanked=ranked,identityComplete=ambiguousIds.length===0;
     if(ambiguousIds.length&&ambiguousIds.length<=24&&strongVisualGeometry(best)){
@@ -98,7 +98,7 @@ export class CardVisualVerifier {
       }
       const resolved=verifiedRanked.find(entry=>entry.card.id===[...verifiedReply.comparisons].sort((a,b)=>b.inliers-a.inliers)[0]?.id);
       identityComplete=Boolean(resolved&&requiredIds.every(id=>verifiedReply.comparisons.some(c=>c.id===id))&&
-        visualIdentityAmbiguities(resolved.card,matcher.cards).every(id=>verifiedReply.comparisons.some(c=>c.id===id))&&
+        visualIdentityAmbiguities(resolved.card,matcher.officialReferences).every(id=>verifiedReply.comparisons.some(c=>c.id===id))&&
         filterCardsBySet([resolved.card],setFilter).length);
     }
     const proof={...selectVisualProof(verifiedReply.comparisons,{frameId,uniqueIdentity:identityComplete}),

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle2, ScanLine, Sparkles } from 'lucide-react';
 import { DOMAIN_COLORS } from '../../data/sampleCards.js';
 import { formatPrice, getPriceValue } from '../../lib/priceFormat.js';
-import { resolveCardImageSource } from '../../lib/cardMatcher.js';
+import { resolveCardImageSource } from '../../lib/cardDatabase.js';
 import { codeLabelOf, fullNameOf } from '../../lib/cardData.js';
 
 export default function ScanAddAnimation({ cardData, priceRecord, priceCurrency = 'EUR', priceExchangeRates }) {

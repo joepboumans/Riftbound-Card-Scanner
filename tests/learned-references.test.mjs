@@ -19,9 +19,9 @@ function memoryStore(initial = []) {
 }
 
 // The matcher reads a crop's artwork as its feature vector; a test crop carries it.
-const matcher = { revision: 7, cards: [{ id: 'ogn-001', f: grid(0) }], samplings: [],
+const matcher = { revision: 7, officialReferences: [{ id: 'ogn-001', f: grid(0) }], samplings: [],
   artworkFeatures(crop, { areaSampling }) { this.samplings.push(areaSampling); return crop.features; },
-  officialFeatures(cardId) { return this.cards.find((card) => card.id === cardId)?.f || null; } };
+  officialFeatures(cardId) { return this.officialReferences.find((card) => card.id === cardId)?.f || null; } };
 const clearQuality = { acceptable: true, issue: null, score: .8, reflectionRisk: false };
 const clearArtwork = (features = grid(.2), patch = {}) =>
   describeScanArtwork({ crop: { features }, quality: clearQuality, outlined: true, matcher, ...patch });
@@ -106,7 +106,7 @@ test('saving a learned reference never bumps the matcher revision', async () => 
   learned.save({ cardId: 'ogn-001', artwork: clearArtwork() });
   await learned.settled();
   assert.equal(matcher.revision, 7);
-  assert.equal(matcher.cards.length, 1, 'learned references never become official reference rows');
+  assert.equal(matcher.officialReferences.length, 1, 'learned references never become official references');
 });
 
 test('removing a learned reference deletes only that one, from storage too', async () => {
@@ -217,10 +217,10 @@ test('a card database update leaves the learned references store alone', async (
     loadLearnedReferences: async () => [reference], writeLearnedReferences: async (change) => { writes.push(change); },
   } } });
   const learned = updateRuntime.load('src/lib/learnedReferences.js').getLearnedReferences();
-  const Matcher = updateRuntime.load('src/lib/cardMatcher.js').default;
-  const cardMatcher = new Matcher();
+  const cardDatabase = updateRuntime.load('src/lib/cardDatabase.js').getCardDatabase();
+  updateRuntime.load('src/lib/cardMatcher.js').getMatcher();
   await learned.settled();
-  await cardMatcher.setDatabase({ gridSize: 2, cards: [{ id: 'ogn-002', set: 'OGN', f: [...grid(3)] }] });
+  await cardDatabase.replace({ gridSize: 2, cards: [{ id: 'ogn-002', set: 'OGN', f: [...grid(3)] }] });
   await learned.settled();
   assert.deepEqual(ids(learned), ['kept']);
   assert.deepEqual(writes, []);

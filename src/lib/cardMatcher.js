@@ -1,48 +1,14 @@
 /**
  * Card Matcher — Identifies cards using artwork color and spatial correlation.
- * Used by both camera mode (useCardDetection) and upload mode (ScanTab).
+ * Its official references are the card database's cards with their artwork
+ * fingerprints prepared for comparison; they follow every card database change.
+ * Used by the scan module for camera frames and uploaded photos.
  */
 
-import { convertFileSrc } from '@tauri-apps/api/core';
-import { loadMatcherDatabase, saveMatcherDatabase } from './indexedDB.js';
-import { isDesktopRuntime, resolveAppUrl } from './runtime.js';
 import { describeFeatures, compareFeatures, MIN_STRUCTURE_NORM } from './cardSimilarity.js';
 import { areaColorGrid } from './cardFeatures.js';
-import { withFullNames } from './cardData.js';
 import { describeLocalArtwork, compareLocalArtwork, compareAlignedArtwork, artworkDetailScore } from './localArtwork.js';
-
-const HASHES_URL = resolveAppUrl(`/card-hashes.json?v=${__BUILD_TIME__}`);
-const isDevelopment = import.meta.env.DEV;
-const debugLog = (...args) => {
-  if (isDevelopment) {
-    console.log(...args);
-  }
-};
-
-const summarizeMatcherSets = (cards = []) => {
-  const bySet = new Map();
-
-  for (const card of cards) {
-    const setCode = String(card?.set || '').trim().toUpperCase();
-    if (!setCode || bySet.has(setCode)) continue;
-
-    const setName = String(card?.setName || '').trim();
-    bySet.set(setCode, {
-      value: setCode,
-      label: setName ? `${setCode} · ${setName}` : setCode,
-    });
-  }
-
-  const labels = [...bySet.values()]
-    .sort((left, right) => left.value.localeCompare(right.value))
-    .map((entry) => entry.label);
-
-  return {
-    count: labels.length,
-    fullLabel: labels.length > 0 ? labels.join(', ') : 'No sets loaded',
-    label: labels.length > 0 ? labels.slice(0, 6).join(', ') : 'No sets loaded',
-  };
-};
+import { getCardDatabase, filterCardsBySet } from './cardDatabase.js';
 
 // Artwork crop region (portrait card) — excludes frame, name bar, text/stats
 const ART_TOP = 0.05;
@@ -50,206 +16,36 @@ const ART_BOTTOM = 0.55;
 const ART_LEFT = 0.05;
 const ART_RIGHT = 0.95;
 
-/**
- * Get the local image URL for a card by its ID.
- * @param {string} cardId - The card ID (e.g., "ogn-001-298")
- * @returns {string} - Local image path (e.g., "/cards/ogn-001-298.webp")
- */
-export function getCardImageUrl(cardId) {
-  return `/cards/${cardId}.webp`;
-}
-
-export function resolveCardImageSource(source, cardId = null) {
-  const fallback = cardId ? getCardImageUrl(cardId) : '';
-  const candidate = source || fallback;
-  if (!candidate) return '';
-
-  if (/^https?:/i.test(candidate)) {
-    return fallback ? resolveAppUrl(fallback) : '';
-  }
-
-  if (/^(data:|blob:|asset:|tauri:)/i.test(candidate)) {
-    return candidate;
-  }
-
-  if (candidate.startsWith('/')) {
-    return resolveAppUrl(candidate);
-  }
-
-  if (isDesktopRuntime()) {
-    return convertFileSrc(candidate);
-  }
-
-  return candidate;
-}
-
-export function normalizeScanSetFilter(setFilter) {
-  if (!setFilter) return [];
-
-  if (Array.isArray(setFilter)) {
-    return setFilter
-      .map((value) => String(value || '').trim().toUpperCase())
-      .filter((value) => value && value !== 'ALL');
-  }
-
-  if (setFilter instanceof Set) {
-    return [...setFilter]
-      .map((value) => String(value || '').trim().toUpperCase())
-      .filter((value) => value && value !== 'ALL');
-  }
-
-  const normalized = String(setFilter || '').trim().toUpperCase();
-  if (!normalized || normalized === 'ALL') return [];
-  return [normalized];
-}
-
-export function filterCardsBySet(cards, setFilter) {
-  const selectedSets = normalizeScanSetFilter(setFilter);
-  if (selectedSets.length === 0) {
-    return cards;
-  }
-
-  const selectedSetLookup = new Set(selectedSets);
-  return cards.filter((card) => selectedSetLookup.has(String(card.set || '').toUpperCase()));
-}
-
-// The gallery image a card record was hashed from. Desktop updates keep a local
-// image path in `imageUrl` and the gallery URL in `sourceImageUrl`; bundled
-// records carry the gallery URL in `imageUrl`. Empty when unknown.
-export function sourceImageUrlOf(card) {
-  if (card?.sourceImageUrl) return card.sourceImageUrl;
-  return /^https?:/i.test(card?.imageUrl || '') ? card.imageUrl : '';
-}
-
-const sameValue = (left, right) => JSON.stringify(left) === JSON.stringify(right);
-
-// The bundled card's metadata over the local record. The local features and
-// image path stay unless the bundled card was hashed from another image.
-function refreshFromBundled(local, bundled) {
-  const localSource = sourceImageUrlOf(local);
-  const bundledSource = sourceImageUrlOf(bundled);
-  if (localSource && bundledSource && localSource !== bundledSource) return bundled;
-  const refreshed = { ...local, ...bundled, f: local.f, imageUrl: local.imageUrl };
-  if (local.sourceImageUrl !== undefined || bundledSource) refreshed.sourceImageUrl = localSource || bundledSource;
-  const changed = Object.keys(refreshed).some((key) => key !== 'f' && !sameValue(refreshed[key], local[key]));
-  return changed ? refreshed : local;
-}
-
-// Top up an imported database after an app update: refresh metadata of known
-// cards, add missing ones and never delete. Different feature grids cannot be mixed.
-export function supplementWithBundledCards(local, bundled) {
-  if (local.gridSize !== bundled.gridSize) return local;
-  const bundledById = new Map(bundled.cards.map((card) => [card.id, card]));
-  let changed = false;
-  const cards = local.cards.map((card) => {
-    const bundledCard = bundledById.get(card.id);
-    const refreshed = bundledCard ? refreshFromBundled(card, bundledCard) : card;
-    if (refreshed !== card) changed = true;
-    return refreshed;
-  });
-  const ids = new Set(local.cards.map((card) => card.id));
-  const missing = bundled.cards.filter((card) => !ids.has(card.id));
-  return changed || missing.length ? { ...local, cards: [...cards, ...missing] } : local;
-}
-
-// Merge an in-app update into the local card database. Re-hashed and new cards
-// replace whole; metadata-only records (no features) keep the local features
-// and image path. Cards missing from the update are never deleted.
-export function mergeCardDatabaseUpdate(existing, update) {
-  const cardsById = new Map((existing?.cards || []).map((card) => [card.id, card]));
-  for (const card of update?.cards || []) {
-    const local = cardsById.get(card.id);
-    if (card.f) cardsById.set(card.id, card);
-    else if (local) cardsById.set(card.id, { ...local, ...card });
-  }
-  return {
-    gridSize: update?.gridSize || existing?.gridSize,
-    cards: [...cardsById.values()],
-  };
-}
-
 class CardMatcher {
-  constructor() {
-    this.cards = [];
+  /**
+   * @param cardDatabase  the card database whose cards are the official references
+   */
+  constructor(cardDatabase) {
+    this.officialReferences = [];
     this.gridSize = 8;
+    this.revision = 0;
     this.ready = false;
     this._tmpCanvas = null;
-    this.databaseSource = 'bundled';
-    this.databaseUpdatedAt = null;
-    this.databaseSetCoverage = summarizeMatcherSets();
+    cardDatabase.subscribe((current) => this._useCards(current));
+    if (cardDatabase.ready) this._useCards(cardDatabase);
   }
 
-  async initialize() {
-    this.ready = false;
-    this.cards = [];
-    this.databaseSource = 'bundled';
-    this.databaseUpdatedAt = null;
-    this.databaseSetCoverage = summarizeMatcherSets();
-
-    let localDatabase = null;
-    try {
-      localDatabase = await loadMatcherDatabase();
-      if (localDatabase) {
-        this._applyDatabase(localDatabase.database);
-        this.databaseSource = 'local';
-        this.databaseUpdatedAt = localDatabase.updatedAt || null;
-        debugLog(`[CardMatcher] Loaded ${this.cards.length} cards from local database (${this.gridSize}x${this.gridSize} grid)`);
-      }
-    } catch (error) {
-      localDatabase = null;
-      console.warn('[CardMatcher] Could not load local database, falling back to bundled asset:', error);
+  // Prepares each card's fingerprint for comparison. `revision` follows the
+  // card database, so a scan started before a change can tell it is stale.
+  // While the card database reloads, the matcher has no references.
+  _useCards({ cards, gridSize, revision, ready }) {
+    if (!ready) {
+      this.officialReferences = [];
+      this.ready = false;
+      return;
     }
-
-    try {
-      const resp = await fetch(HASHES_URL);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      if (localDatabase) {
-        const supplemented = supplementWithBundledCards(localDatabase.database, data);
-        if (supplemented !== localDatabase.database) {
-          this._applyDatabase(supplemented);
-          const saved = await saveMatcherDatabase(supplemented);
-          this.databaseUpdatedAt = saved.updatedAt || this.databaseUpdatedAt;
-        }
-      } else {
-        this._applyDatabase(data);
-        debugLog(`[CardMatcher] Loaded ${this.cards.length} cards from bundled asset (${this.gridSize}x${this.gridSize} grid)`);
-      }
-    } catch (error) {
-      // Offline/missing bundles or a full local store must not hide a usable
-      // imported database (including additions already loaded in memory).
-      if (this.ready) {
-        console.warn('[CardMatcher] Could not synchronize bundled cards:', error);
-        return;
-      }
-      throw new Error('Missing card hash database at /card-hashes.json. Use the Update Card Database button to import a generated card-hashes.json file from this PC.');
-    }
-  }
-
-  _applyDatabase(database) {
-    this.revision = (this.revision || 0) + 1;
+    this.revision = revision;
     this._tmpCanvas = null;
-    this.gridSize = database.gridSize;
-    this.cards = withFullNames(database.cards || []).map((card) => {
-      const f = card.f instanceof Float32Array ? card.f : new Float32Array(card.f);
-      return { ...card, f, featureStats: describeFeatures(f), localArtwork: describeLocalArtwork(f, this.gridSize),
-        broadArtwork: describeLocalArtwork(f,this.gridSize,{radius:Math.max(1,Math.round(this.gridSize/4))}) };
-    });
-    this.databaseSetCoverage = summarizeMatcherSets(this.cards);
+    this.gridSize = gridSize;
+    this.officialReferences = cards.map((card) => ({ ...card, featureStats: describeFeatures(card.f),
+      localArtwork: describeLocalArtwork(card.f, gridSize),
+      broadArtwork: describeLocalArtwork(card.f, gridSize, { radius: Math.max(1, Math.round(gridSize / 4)) }) }));
     this.ready = true;
-  }
-
-  async setDatabase(database) {
-    const normalized = {
-      gridSize: database.gridSize || this.gridSize,
-      cards: database.cards || [],
-    };
-
-    const savedRecord = await saveMatcherDatabase(normalized);
-    this._applyDatabase(normalized);
-    this.databaseSource = 'local';
-    this.databaseUpdatedAt = savedRecord.updatedAt || null;
-    debugLog(`[CardMatcher] Database updated locally (${this.cards.length} cards)`);
   }
 
   /**
@@ -264,7 +60,7 @@ class CardMatcher {
   }
 
   rank(cropCanvas, { areaSampling = false, ...options } = {}) {
-    if (!this.ready || !this.cards.length) return [];
+    if (!this.ready || !this.officialReferences.length) return [];
     return this.rankFeatures(this.artworkFeatures(cropCanvas, { areaSampling }), options);
   }
 
@@ -275,7 +71,7 @@ class CardMatcher {
 
   // A card's official reference features, or null when it is not in the card database.
   officialFeatures(cardId) {
-    return this.cards.find((card) => card.id === cardId)?.f || null;
+    return this.officialReferences.find((card) => card.id === cardId)?.f || null;
   }
 
   rankFeatures(features, { setFilter, limit = 3, localStructure = false, alignLocal = true, requiredIds = null } = {}) {
@@ -293,7 +89,7 @@ class CardMatcher {
       if(list.length>maximum)list.length=maximum;
     };
     let bestLegacy = null, secondLegacy = 0;
-    for (const card of filterCardsBySet(this.cards, setFilter)) {
+    for (const card of filterCardsBySet(this.officialReferences, setFilter)) {
       if (!card.featureStats || card.f.length !== features.length) continue;
       const scores = compareFeatures(features, card.f, featureStats, card.featureStats);
       const entry = { card, ...scores };
@@ -390,7 +186,7 @@ let matcherInstance = null;
 
 export function getMatcher() {
   if (!matcherInstance) {
-    matcherInstance = new CardMatcher();
+    matcherInstance = new CardMatcher(getCardDatabase());
   }
   return matcherInstance;
 }

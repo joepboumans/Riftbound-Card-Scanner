@@ -3,7 +3,7 @@ import { Camera, CameraOff, RotateCw, Zap, ZapOff, AlertCircle, ScanLine, Radar 
 import { getScanGuide } from '../../lib/scanGeometry.js';
 import { getScanGuidance } from '../../lib/scanQuality.js';
 import { saveNativeFrame, openNativeFrameFolder, nativeFrameDiagnostics } from '../../lib/nativeFrame.js';
-import { resolveCardImageSource } from '../../lib/cardMatcher.js';
+import { resolveCardImageSource } from '../../lib/cardDatabase.js';
 import { fullNameOf } from '../../lib/cardData.js';
 import CardImage from '../CardImage.jsx';
 import { openDebugScanFolder } from '../../lib/debugScanCapture.js';

@@ -1,7 +1,7 @@
 import React, { memo } from 'react';
 import { Trash2, Plus, Minus, Sparkles } from 'lucide-react';
 import { CONDITIONS, LANGUAGES, DOMAIN_COLORS, RARITY_STYLES, isFoilOnly } from '../../data/sampleCards.js';
-import { resolveCardImageSource } from '../../lib/cardMatcher.js';
+import { resolveCardImageSource } from '../../lib/cardDatabase.js';
 import { formatPrice, getPriceValue } from '../../lib/priceFormat.js';
 import CardImage from '../CardImage.jsx';
 import { codeLabelOf, fullNameOf } from '../../lib/cardData.js';

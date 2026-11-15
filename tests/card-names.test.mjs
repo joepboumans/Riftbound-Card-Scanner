@@ -52,10 +52,10 @@ test('a saved entry whose id is not in the card database keeps its stored copy',
 
 test('search over the loaded card database finds a card by full name, printed name and code', () => {
   const runtime = createRuntime();
-  const matcher = runtime.load('src/lib/cardMatcher.js').getMatcher();
-  matcher._applyDatabase({ gridSize: 2, cards: cardDatabase.map((card) => ({ ...card, f: [0, 0, 0] })) });
+  const loaded = runtime.load('src/lib/cardDatabase.js').getCardDatabase();
+  loaded._apply({ gridSize: 2, cards: cardDatabase.map((card) => ({ ...card, f: [0, 0, 0] })) });
   const { searchCards } = runtime.load('src/lib/cardSearch.js');
-  const ids = (query) => searchCards(matcher.cards, query).map((card) => card.id);
+  const ids = (query) => searchCards(loaded.cards, query).map((card) => card.id);
   assert.ok(ids("Kai'Sa, Daughter").includes('ogn-247-298'));
   assert.ok(ids('Daughter of the Void').includes('ogn-247-298'));
   assert.ok(ids('OGN-247').includes('ogn-247-298'));

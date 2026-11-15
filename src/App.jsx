@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ScanDebugQueue } from './lib/scanDebugQueue.js';
-import { listen } from '@tauri-apps/api/event';
 import AppShell from './components/AppShell.jsx';
 import BottomTabBar from './components/BottomTabBar.jsx';
 import ToastNotification from './components/ToastNotification.jsx';
@@ -14,11 +13,12 @@ import CollectionTab from './components/collection/CollectionTab.jsx';
 import SettingsTab from './components/settings/SettingsTab.jsx';
 import { useCamera } from './hooks/useCamera.js';
 import { useCardDetection } from './hooks/useCardDetection.js';
+import { snapScan } from './lib/cardScan.js';
 import { useAutoScan } from './hooks/useAutoScan.js';
 import { useScanSound } from './hooks/useScanSound.js';
 import { useNewPrintCheck } from './hooks/useNewPrintCheck.js';
 import { downloadCSV, copyDeckList, validateForExport } from './lib/csvExporter.js';
-import { getMatcher, mergeCardDatabaseUpdate, sourceImageUrlOf } from './lib/cardMatcher.js';
+import { getCardDatabase, desktopUpdateSource } from './lib/cardDatabase.js';
 import { buildScanSetOptions, summarizeScanSetCoverage } from './lib/scanSets.js';
 import { isDesktopRuntime } from './lib/runtime.js';
 import { invokeDesktopCommand } from './lib/desktopBridge.js';
@@ -55,7 +55,6 @@ const STORAGE_KEYS = {
 };
 
 const SCAN_ADD_ANIMATION_MS = 980;
-const CARD_DATABASE_PROGRESS_EVENT = 'card-database-progress';
 const APP_UPDATE_IDLE_STATE = {
   status: 'idle',
   update: null,
@@ -135,6 +134,7 @@ export default function App() {
     replacePendingList(refreshPendingList(pendingListRef.current, cards));
     setScannedCards((entries) => restoreCardEntries(entries, cards));
   }, [replacePendingList]);
+  useEffect(() => getCardDatabase().subscribe(({ cards, ready }) => { if (ready) applyCardDatabase(cards); }), [applyCardDatabase]);
 
   const [priceSyncBusy, setPriceSyncBusy] = useState(false);
   const [cardDatabaseBusy, setCardDatabaseBusy] = useState(false);
@@ -190,17 +190,17 @@ export default function App() {
   const priceExchangeRateDate = priceSyncMeta?.exchangeRateDate || priceSyncMeta?.usdPerEurRateDate || FALLBACK_EXCHANGE_RATE_DATE;
   const priceExchangeRateFallback = priceSyncMeta ? Boolean(priceSyncMeta.exchangeRateFallback ?? priceSyncMeta.usdPerEurRateFallback) : true;
   const yieldToPaint = useCallback(() => new Promise((resolve) => requestAnimationFrame(() => resolve())), []);
-  const matcher = getMatcher();
+  const cardDatabase = getCardDatabase();
   const scanRecording = SCANNER_DIAGNOSTICS_AVAILABLE ? useScanSessionRecording({videoRef:camera.videoRef,
     active:debugEnabled && camera.isActive && activeTab === 'scan' && scanCameraVisible,
-    contextKey:JSON.stringify([activeTab,scanCameraVisible,scanSetFilter,scannerExperiments,cameraDeviceId,cameraProfile,camera.facingMode,modelPreference,matcher.revision]),
+    contextKey:JSON.stringify([activeTab,scanCameraVisible,scanSetFilter,scannerExperiments,cameraDeviceId,cameraProfile,camera.facingMode,modelPreference,cardDatabase.revision]),
     metadata:{...scannerExperiments,detectorModel:modelPreference,cameraProfile,setFilter:scanSetFilter,cameraSettings:camera.settings}}) : null;
   const cardDatabaseSourceLabel = detection.detectorState === 'ready'
-    ? (matcher.databaseSource === 'local' ? 'Imported locally' : 'Bundled file')
+    ? (cardDatabase.source === 'local' ? 'Imported locally' : 'Bundled file')
     : 'Unknown';
-  const cardDatabaseUpdatedAt = detection.detectorState === 'ready' ? matcher.databaseUpdatedAt : null;
+  const cardDatabaseUpdatedAt = detection.detectorState === 'ready' ? cardDatabase.updatedAt : null;
   const cardDatabaseSetCoverage = detection.detectorState === 'ready'
-    ? summarizeScanSetCoverage(matcher.cards)
+    ? summarizeScanSetCoverage(cardDatabase.cards)
     : { count: 0, fullLabel: 'Unknown', label: 'Unknown' };
   const appUpdateBusy = APP_UPDATE_BUSY_STATUSES.has(appUpdateState.status);
   const userSnapshotRef = useRef(null);
@@ -314,27 +314,15 @@ export default function App() {
   // ─── Initialization ────────────────────────────────────────
   const hasShownRestoreNotification = useRef(false);
 
-  const processCardDatabase = useCallback(async (parsed) => {
-    if (!parsed || !Array.isArray(parsed.cards) || parsed.cards.length === 0) {
-      throw new Error('The selected file does not look like a valid card-hashes.json database.');
-    }
-
-    const matcher = getMatcher();
-    await matcher.setDatabase(parsed);
-    applyCardDatabase(matcher.cards);
-
-    const loadedCount = parsed.cards.length;
+  // After the card database was replaced or updated with `loadedCount` cards.
+  const announceCardDatabase = useCallback((loadedCount) => {
     showNotification(`Card database updated — ${loadedCount} cards loaded`, 'success');
 
     if (initErrorType !== 'model') {
       setInitError(null);
       setInitErrorType(null);
     }
-  }, [applyCardDatabase, initErrorType, showNotification]);
-
-  const processCardDatabaseText = useCallback(async (text) => {
-    await processCardDatabase(JSON.parse(text));
-  }, [processCardDatabase]);
+  }, [initErrorType, showNotification]);
 
   const refreshPriceCache = useCallback(async () => {
     try {
@@ -379,11 +367,9 @@ export default function App() {
       await detection.initDetector(modelPreference);
       setLoadProgress(0.5);
 
-      // Stage 2: Initialize card matcher (loads card-hashes.json or local DB)
+      // Stage 2: Load the card database (local copy or card-hashes.json)
       setLoadStage('matcher');
-      const matcher = getMatcher();
-      await matcher.initialize();
-      applyCardDatabase(matcher.cards);
+      await getCardDatabase().load();
       setLoadProgress(0.85);
 
       // Done
@@ -398,7 +384,7 @@ export default function App() {
       setInitErrorType(formatted.type);
       setIsLoading(false);
     }
-  }, [applyCardDatabase, detection.initDetector, formatInitError, modelPreference]);
+  }, [detection.initDetector, formatInitError, modelPreference]);
 
   useEffect(() => {
     initializeApp();
@@ -408,7 +394,7 @@ export default function App() {
     refreshPriceCache();
   }, [refreshPriceCache]);
 
-  const getLocalCardIds = useCallback(() => getMatcher().cards
+  const getLocalCardIds = useCallback(() => getCardDatabase().cards
     .map((card) => String(card.id || '').trim())
     .filter(Boolean), []);
   const newPrints = useNewPrintCheck({ ready: !isLoading && !initError, getKnownIds: getLocalCardIds });
@@ -429,52 +415,31 @@ export default function App() {
       await yieldToPaint();
 
       try {
-        const matcher = getMatcher();
-        const knownCards = matcher.cards
-          .map((card) => ({ id: String(card.id || '').trim(), sourceImageUrl: sourceImageUrlOf(card) }))
-          .filter((card) => card.id);
-        const unlisten = await listen(CARD_DATABASE_PROGRESS_EVENT, (event) => {
-          const progress = event.payload || {};
-          const percent = Number(progress.percent);
-
-          if (!Number.isFinite(percent)) {
-            return;
-          }
-
-          setUpdateTask((current) => current ? {
-            ...current,
-            detail: progress.message || current.detail,
-            progress: Math.max(current.progress, Math.min(1, percent)),
-          } : current);
+        const { count, skippedCards } = await getCardDatabase().update(desktopUpdateSource, {
+          onProgress: (progress) => {
+            const percent = Number(progress.percent);
+            if (!Number.isFinite(percent)) return;
+            setUpdateTask((current) => current ? {
+              ...current,
+              detail: progress.message || current.detail,
+              progress: Math.max(current.progress, Math.min(1, percent)),
+            } : current);
+          },
+          onMerged: () => setUpdateTask({
+            title: 'Updating card database',
+            detail: 'Importing the refreshed card database...',
+            progress: 0.96,
+          }),
         });
-
-        let text;
-        try {
-          text = await invokeDesktopCommand('update_card_database', { knownCards, gridSize: matcher.gridSize });
-        } finally {
-          unlisten();
-        }
-
-        const updateDatabase = JSON.parse(text);
-        const mergedDatabase = mergeCardDatabaseUpdate(
-          { gridSize: matcher.gridSize, cards: matcher.cards },
-          updateDatabase
-        );
-        setUpdateTask({
-          title: 'Updating card database',
-          detail: 'Importing the refreshed matcher database...',
-          progress: 0.96,
-        });
-        await processCardDatabase(mergedDatabase);
-        if (updateDatabase.skippedCards > 0) {
-          showNotification(`${updateDatabase.skippedCards} cards could not be downloaded. Run Update Card Database again to retry them.`, 'info');
+        announceCardDatabase(count);
+        if (skippedCards > 0) {
+          showNotification(`${skippedCards} cards could not be downloaded. Run Update Card Database again to retry them.`, 'info');
         }
         setUpdateTask({
           title: 'Updating card database',
           detail: 'Refreshing local set filters...',
           progress: 0.98,
         });
-        applyCardDatabase(getMatcher().cards);
         refreshNewPrints();
         setUpdateTask({
           title: 'Updating card database',
@@ -494,7 +459,7 @@ export default function App() {
     }
 
     cardDatabaseInputRef.current?.click();
-  }, [applyCardDatabase, cardDatabaseBusy, processCardDatabase, refreshNewPrints, showNotification, yieldToPaint]);
+  }, [announceCardDatabase, cardDatabaseBusy, refreshNewPrints, showNotification, yieldToPaint]);
 
   const handleImportCardDatabase = useCallback(() => {
     cardDatabaseInputRef.current?.click();
@@ -507,13 +472,12 @@ export default function App() {
 
     try {
       const text = await file.text();
-      await processCardDatabaseText(text);
-      applyCardDatabase(getMatcher().cards);
+      announceCardDatabase(await getCardDatabase().replaceFromFile(text));
     } catch (error) {
       console.error('[App] Card database import error:', error);
       showNotification(`Card database update failed: ${error.message}`, 'error');
     }
-  }, [applyCardDatabase, processCardDatabaseText, showNotification]);
+  }, [announceCardDatabase, showNotification]);
 
   const handleImportPriceSnapshot = useCallback(async () => {
     if (priceSyncBusy) {
@@ -549,7 +513,6 @@ export default function App() {
 
       const result = await importPriceSnapshotCsv(text, {
         sourceHint: PRICE_SOURCE_URL,
-        matcher: getMatcher(),
         ...exchangeRateOptions,
       });
       setUpdateTask({
@@ -874,7 +837,7 @@ export default function App() {
     debugEnabled,
     onDebugAccepted: captureAcceptedDebugScan,
     recognitionContext: JSON.stringify([activeTab, scanCameraVisible, scanSetFilter, debugEnabled, scannerExperiments, scanMatching,
-      cameraDeviceId, cameraProfile, camera.facingMode, modelPreference, matcher.revision]),
+      cameraDeviceId, cameraProfile, camera.facingMode, modelPreference, cardDatabase.revision]),
   });
 
   const snapBusyRef = useRef(false);
@@ -887,18 +850,9 @@ export default function App() {
     if (!camera.isActive || detection.isProcessing || snapBusyRef.current || autoEnabledRef.current || manualScanReview) return;
     snapBusyRef.current = true;
     try {
-      textVerifier?.reset();
-      let result, review = null;
-      const deadline = Date.now() + 2000;
-      do {
-        result = await detection.detectSingleFrame(camera.captureFrame, { includeCandidate: true, includeReview: true });
-        // Keep the latest outlined card, preferring one with acceptable quality.
-        const outlined = Boolean(result?.box || result?.reviewCandidates?.length);
-        if (outlined && (result.quality?.acceptable || !review?.quality?.acceptable)) review = result;
-        if (passesScanThreshold(result) || !textVerifier ||
-          (result?.quality?.acceptable && result.textVerification?.status !== 'pending')) break;
-        if (Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 125));
-      } while (Date.now() < deadline);
+      const { result, review } = await snapScan(
+        () => detection.detectSingleFrame(camera.captureFrame, { includeCandidate: true, includeReview: true }),
+        { accepts: passesScanThreshold, textVerifier });
 
       if (autoEnabledRef.current) return;
       if (result?.matched && handleCardDetected(result)) {
@@ -909,7 +863,7 @@ export default function App() {
         showNotification('No card accepted — hold the card steady or review it manually', 'info');
       }
     } finally { snapBusyRef.current = false; }
-  }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, showNotification, autoScan, textVerifier, manualScanReview]);
+  }, [camera.isActive, camera.captureFrame, detection, handleCardDetected, passesScanThreshold, showNotification, autoScan, textVerifier, manualScanReview]);
 
   // The one accept path for the Choice strip and Snap review. It skips the
   // acceptance rules on purpose: the user vouches for the card.

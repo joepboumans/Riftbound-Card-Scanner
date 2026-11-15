@@ -10,7 +10,7 @@ const grid = (seed = 0) => Float32Array.from({ length: 12 }, (_, i) => .5 + .4 *
 const scanFeatures = grid(3);
 const artwork = { features: () => scanFeatures };
 const card = (id, set = 'OGN') => ({ id, name: id, code: `${set}-${id}/100`, set, f: grid(id.length) });
-const matcher = { gridSize: 2, cards: ['first', 'second', 'third', 'mine'].map((id) => card(id)) };
+const matcher = { gridSize: 2, officialReferences: ['first', 'second', 'third', 'mine'].map((id) => card(id)) };
 const shown = (id, similarity) => ({ id, name: id, code: `OGN-${id}/100`, similarity, sim: (similarity * 100).toFixed(1) });
 const official = [shown('first', .8), shown('second', .75), shown('third', .7)];
 const learned = (cardId, features = scanFeatures, patch = {}) =>
@@ -39,7 +39,7 @@ test('a card shown from both sources appears once, with its best score', () => {
 });
 
 test('learned references honour the scan set filter', () => {
-  const filtered = { ...matcher, cards: [...matcher.cards, card('other', 'SFD')] };
+  const filtered = { ...matcher, officialReferences: [...matcher.officialReferences, card('other', 'SFD')] };
   const candidates = mergeLearnedCandidates(official, { artwork, references: [learned('other')], matcher: filtered, setFilter: 'OGN' });
   assert.deepEqual(candidates, official);
 });
@@ -64,7 +64,7 @@ test('the scan artwork is not read when no learned reference is usable', () => {
 
 test('an unused learned reference is used again once its card returns', () => {
   const references = [learned('retired')];
-  const updated = { ...matcher, cards: [...matcher.cards, card('retired')] };
+  const updated = { ...matcher, officialReferences: [...matcher.officialReferences, card('retired')] };
   assert.deepEqual(mergeLearnedCandidates(official, { artwork, references, matcher }), official);
   assert.equal(mergeLearnedCandidates(official, { artwork, references, matcher: updated })[0].id, 'retired');
 });
@@ -101,15 +101,14 @@ async function detectWith(references, ranked, options = { includeCandidate: true
   const textVerifier = { reset() {}, getGeometryHint: () => null, observe: () => ({ status: 'pending' }) };
   const runtime = createRuntime({ globals: { document: canvasDocument() }, mocks: {
     'src/lib/yoloDetector.js': { getDetector: () => detector, DetectorState: { READY: 'ready', UNLOADED: 'unloaded', LOADING: 'loading', ERROR: 'error' } },
-    'src/lib/cardMatcher.js': { getMatcher: () => liveMatcher, filterCardsBySet: (cards) => cards },
     'src/lib/indexedDB.js': { loadLearnedReferences: async () => references, writeLearnedReferences: async () => {} },
   } });
   await runtime.load('src/lib/learnedReferences.js').getLearnedReferences().settled();
-  const hook = runtime.mount(runtime.load('src/hooks/useCardDetection.js').useCardDetection);
-  await hook.render({ minSimilarity: 0.9, textVerifier }).initDetector();
+  const scan = runtime.load('src/lib/cardScan.js').createCardScan({ getDetector: () => detector, getMatcher: () => liveMatcher,
+    getLearnedReferences: () => runtime.load('src/lib/learnedReferences.js').getLearnedReferences() });
   const frame = { width: 800, height: 900, frameId: 1, capturedAt: Date.now(),
     scanRegion: { x: 400, y: 100, guide: { x: 100, y: 100, width: 300, height: 500 } } };
-  const result = await hook.render({ minSimilarity: 0.9, textVerifier }).detectSingleFrame(() => frame, options);
+  const { result } = await scan.scanFrame(frame, { setFilter: 'all', minSimilarity: 0.9, minSimilarityGap: 0.05, textVerifier }, options);
   return Object.assign(result, { featureReads: liveMatcher.featureReads });
 }
 
