@@ -29,11 +29,11 @@ function rankLearnedReferences(features, references, cardsById) {
  *
  * @param {object[]} candidates - official shown candidates, best first
  * @param {{ artwork: { features(): ArrayLike<number> }, references: object[],
- *   matcher: { references: object[], gridSize: number }, setFilter?: string|string[] }} options
+ *   matcher: { officialReferences: object[], gridSize: number }, setFilter?: string|string[] }} options
  */
 export function mergeLearnedCandidates(candidates = [], { artwork, references = [], matcher, setFilter } = {}) {
-  if (!references.length || !artwork || !matcher?.references?.length) return candidates;
-  const cardsById = new Map(filterCardsBySet(matcher.references, setFilter).map((card) => [card.id, card]));
+  if (!references.length || !artwork || !matcher?.officialReferences?.length) return candidates;
+  const cardsById = new Map(filterCardsBySet(matcher.officialReferences, setFilter).map((card) => [card.id, card]));
   const usable = references.filter((reference) =>
     isUsableLearnedReference(reference, { cardIds: cardsById, gridSize: matcher.gridSize }));
   // The scan's artwork is read only when a learned reference can use it.

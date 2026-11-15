@@ -10,7 +10,7 @@ const grid = (seed = 0) => Float32Array.from({ length: 12 }, (_, i) => .5 + .4 *
 const scanFeatures = grid(3);
 const artwork = { features: () => scanFeatures };
 const card = (id, set = 'OGN') => ({ id, name: id, code: `${set}-${id}/100`, set, f: grid(id.length) });
-const matcher = { gridSize: 2, references: ['first', 'second', 'third', 'mine'].map((id) => card(id)) };
+const matcher = { gridSize: 2, officialReferences: ['first', 'second', 'third', 'mine'].map((id) => card(id)) };
 const shown = (id, similarity) => ({ id, name: id, code: `OGN-${id}/100`, similarity, sim: (similarity * 100).toFixed(1) });
 const official = [shown('first', .8), shown('second', .75), shown('third', .7)];
 const learned = (cardId, features = scanFeatures, patch = {}) =>
@@ -39,7 +39,7 @@ test('a card shown from both sources appears once, with its best score', () => {
 });
 
 test('learned references honour the scan set filter', () => {
-  const filtered = { ...matcher, references: [...matcher.references, card('other', 'SFD')] };
+  const filtered = { ...matcher, officialReferences: [...matcher.officialReferences, card('other', 'SFD')] };
   const candidates = mergeLearnedCandidates(official, { artwork, references: [learned('other')], matcher: filtered, setFilter: 'OGN' });
   assert.deepEqual(candidates, official);
 });
@@ -64,7 +64,7 @@ test('the scan artwork is not read when no learned reference is usable', () => {
 
 test('an unused learned reference is used again once its card returns', () => {
   const references = [learned('retired')];
-  const updated = { ...matcher, references: [...matcher.references, card('retired')] };
+  const updated = { ...matcher, officialReferences: [...matcher.officialReferences, card('retired')] };
   assert.deepEqual(mergeLearnedCandidates(official, { artwork, references, matcher }), official);
   assert.equal(mergeLearnedCandidates(official, { artwork, references, matcher: updated })[0].id, 'retired');
 });

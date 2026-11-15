@@ -19,9 +19,9 @@ function memoryStore(initial = []) {
 }
 
 // The matcher reads a crop's artwork as its feature vector; a test crop carries it.
-const matcher = { revision: 7, references: [{ id: 'ogn-001', f: grid(0) }], samplings: [],
+const matcher = { revision: 7, officialReferences: [{ id: 'ogn-001', f: grid(0) }], samplings: [],
   artworkFeatures(crop, { areaSampling }) { this.samplings.push(areaSampling); return crop.features; },
-  officialFeatures(cardId) { return this.references.find((card) => card.id === cardId)?.f || null; } };
+  officialFeatures(cardId) { return this.officialReferences.find((card) => card.id === cardId)?.f || null; } };
 const clearQuality = { acceptable: true, issue: null, score: .8, reflectionRisk: false };
 const clearArtwork = (features = grid(.2), patch = {}) =>
   describeScanArtwork({ crop: { features }, quality: clearQuality, outlined: true, matcher, ...patch });
@@ -106,7 +106,7 @@ test('saving a learned reference never bumps the matcher revision', async () => 
   learned.save({ cardId: 'ogn-001', artwork: clearArtwork() });
   await learned.settled();
   assert.equal(matcher.revision, 7);
-  assert.equal(matcher.references.length, 1, 'learned references never become official references');
+  assert.equal(matcher.officialReferences.length, 1, 'learned references never become official references');
 });
 
 test('removing a learned reference deletes only that one, from storage too', async () => {

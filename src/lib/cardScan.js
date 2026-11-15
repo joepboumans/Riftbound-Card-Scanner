@@ -4,6 +4,7 @@ import { hasLocalArtworkSupport } from './localArtwork.js';
 import { selectGuideDetection, mapDetectionBox } from './scanGeometry.js';
 import { attachScanEvidence, attachScanArtwork } from './scanEvidence.js';
 import { describeScanArtwork } from './learnedReferences.js';
+import { getCardDatabase } from './cardDatabase.js';
 import { mergeLearnedCandidates } from './learnedCandidates.js';
 import { emitScanDiagnostic } from './scanDiagnostics.js';
 import { isScanFrameCancelled } from './scanQuality.js';
@@ -23,7 +24,8 @@ const MAX_ASPECT_DEVIATION = 0.22;
  *
  * createCardScan is created once with getters for its long-lived tools, each
  * read when a scan starts:
- *   getDetector, getMatcher, getVisualVerifier, getLearnedReferences
+ *   getDetector, getMatcher, getVisualVerifier, getLearnedReferences,
+ *   getCards (the card database's cards, for reading card text)
  *
  *   scanFrame(frame, settings, options) → { observation, result }
  *     settings: { setFilter, minSimilarity, minSimilarityGap, textVerifier, cropRefiner }
@@ -39,7 +41,8 @@ const MAX_ASPECT_DEVIATION = 0.22;
  * The acceptance decision is built from official references only and is
  * complete before learned references are merged into the shown candidates.
  */
-export function createCardScan({ getDetector, getMatcher, getVisualVerifier = () => null, getLearnedReferences }) {
+export function createCardScan({ getDetector, getMatcher, getVisualVerifier = () => null, getLearnedReferences,
+  getCards = () => getCardDatabase().cards }) {
   let epoch = 0;
   // The last card proven by its artwork geometry: the next frame may reuse its box.
   let visualFollowup = null;
@@ -157,11 +160,12 @@ export function createCardScan({ getDetector, getMatcher, getVisualVerifier = ()
         { minSimilarityGap });
       if (textVerifier) {
         const filterKey = JSON.stringify(setFilter);
-        if (textIndex?.cards !== matcher.references || textIndex?.filterKey !== filterKey) {
+        const cards = getCards();
+        if (textIndex?.cards !== cards || textIndex?.filterKey !== filterKey) {
           textVerifier.reset();
           // Read identity against the full database: a set filter must not hide
           // clear text evidence that the physical card belongs to another set.
-          textIndex = { cards: matcher.references, filterKey, index: new CardTextIndex(matcher.references) };
+          textIndex = { cards, filterKey, index: new CardTextIndex(cards) };
         }
         const context = `${scanEpoch}:${matcher.revision || 0}`;
         const visualReady = hasStrongVisualProof(result);
@@ -236,6 +240,7 @@ export async function snapScan(scanOnce, { accepts, textVerifier = null, now = D
  *   original  the full-resolution photo, used to crop each card
  *   isCurrent() false once the user picked another photo: the scan stops
  *   photoId   names this photo in text verification frame ids
+ *   cards     the card database's cards, for reading card text
  * Returns null when cancelled, otherwise { status, cards }:
  *   status 'detector-not-ready' | 'no-cards' | 'scanned'
  *   cards  one entry per card worth listing, with its box in `image`
@@ -243,7 +248,7 @@ export async function snapScan(scanOnce, { accepts, textVerifier = null, now = D
  * Photos use a quarter-turn retry and accept a single frame of text; learned
  * references are not used.
  */
-export async function scanPhoto(image, { original = image, detector, matcher, settings = {}, isCurrent = () => true, photoId = 'photo' }) {
+export async function scanPhoto(image, { original = image, detector, matcher, cards = getCardDatabase().cards, settings = {}, isCurrent = () => true, photoId = 'photo' }) {
   const { setFilter, minSimilarity, minSimilarityGap, textVerifier = null, cropRefiner = null } = settings;
   if (detector.state !== 'ready') return { status: 'detector-not-ready', cards: [] };
   const canvas = document.createElement('canvas');
@@ -270,7 +275,7 @@ export async function scanPhoto(image, { original = image, detector, matcher, se
     if (textVerifier && matchResult?.card) {
       textVerification = await textVerifier.verifyPhoto(recognition.textCrop, { hint: matchResult.card,
         alternativeCrops: recognition.alternateTextCrops,
-        index: new CardTextIndex(matcher.references), frameId: `${photoId}-${results.length}` });
+        index: new CardTextIndex(cards), frameId: `${photoId}-${results.length}` });
       if (!isCurrent()) return null;
       const result = applyTextVerification(recognitionResult, matchResult, textVerification, { photo: true });
       recognitionResult = result;
@@ -291,8 +296,8 @@ export async function scanPhoto(image, { original = image, detector, matcher, se
   // A card is listed when it matched, its artwork reaches the threshold, or its
   // crops or text disagree and the user needs to look. Without a loaded card
   // database every detection is listed.
-  const cards = matcher.ready
+  const listed = matcher.ready
     ? results.filter(r => r.matchResult && (r.recognitionResult.matched || r.matchResult.similarity >= minSimilarity || r.geometryConflict || r.textVerification?.status === 'conflict'))
     : results;
-  return { status: 'scanned', cards };
+  return { status: 'scanned', cards: listed };
 }

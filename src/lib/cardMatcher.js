@@ -21,7 +21,7 @@ class CardMatcher {
    * @param cardDatabase  the card database whose cards are the official references
    */
   constructor(cardDatabase) {
-    this.references = [];
+    this.officialReferences = [];
     this.gridSize = 8;
     this.revision = 0;
     this.ready = false;
@@ -32,11 +32,17 @@ class CardMatcher {
 
   // Prepares each card's fingerprint for comparison. `revision` follows the
   // card database, so a scan started before a change can tell it is stale.
-  _useCards({ cards, gridSize, revision }) {
+  // While the card database reloads, the matcher has no references.
+  _useCards({ cards, gridSize, revision, ready }) {
+    if (!ready) {
+      this.officialReferences = [];
+      this.ready = false;
+      return;
+    }
     this.revision = revision;
     this._tmpCanvas = null;
     this.gridSize = gridSize;
-    this.references = cards.map((card) => ({ ...card, featureStats: describeFeatures(card.f),
+    this.officialReferences = cards.map((card) => ({ ...card, featureStats: describeFeatures(card.f),
       localArtwork: describeLocalArtwork(card.f, gridSize),
       broadArtwork: describeLocalArtwork(card.f, gridSize, { radius: Math.max(1, Math.round(gridSize / 4)) }) }));
     this.ready = true;
@@ -54,7 +60,7 @@ class CardMatcher {
   }
 
   rank(cropCanvas, { areaSampling = false, ...options } = {}) {
-    if (!this.ready || !this.references.length) return [];
+    if (!this.ready || !this.officialReferences.length) return [];
     return this.rankFeatures(this.artworkFeatures(cropCanvas, { areaSampling }), options);
   }
 
@@ -65,7 +71,7 @@ class CardMatcher {
 
   // A card's official reference features, or null when it is not in the card database.
   officialFeatures(cardId) {
-    return this.references.find((card) => card.id === cardId)?.f || null;
+    return this.officialReferences.find((card) => card.id === cardId)?.f || null;
   }
 
   rankFeatures(features, { setFilter, limit = 3, localStructure = false, alignLocal = true, requiredIds = null } = {}) {
@@ -83,7 +89,7 @@ class CardMatcher {
       if(list.length>maximum)list.length=maximum;
     };
     let bestLegacy = null, secondLegacy = 0;
-    for (const card of filterCardsBySet(this.references, setFilter)) {
+    for (const card of filterCardsBySet(this.officialReferences, setFilter)) {
       if (!card.featureStats || card.f.length !== features.length) continue;
       const scores = compareFeatures(features, card.f, featureStats, card.featureStats);
       const entry = { card, ...scores };

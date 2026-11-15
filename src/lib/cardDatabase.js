@@ -15,6 +15,7 @@ import { withFullNames } from './cardData.js';
 
 const HASHES_URL = resolveAppUrl(`/card-hashes.json?v=${__BUILD_TIME__}`);
 const DEFAULT_GRID_SIZE = 8;
+const INVALID_DATABASE = 'The selected file does not look like a valid card-hashes.json database.';
 const debugLog = (...args) => {
   if (import.meta.env.DEV) console.log(...args);
 };
@@ -138,7 +139,7 @@ export function mergeCardDatabaseUpdate(existing, update) {
 }
 
 /**
- * The desktop app's update source: asks the Riot gallery, through the desktop
+ * The desktop app's update source: asks the official card gallery, through the desktop
  * shell, for new and changed cards. Progress arrives as
  * { percent: 0..1, message }.
  */
@@ -170,8 +171,9 @@ export const desktopUpdateSource = {
  *                            gridSize, onProgress }) }) for new and changed cards,
  *                            merges them in and saves; never deletes a card.
  *                            Returns { count, skippedCards }
- *   subscribe(listener)      listener(cardDatabase) after every change; returns
- *                            a function that stops listening
+ *   subscribe(listener)      listener(cardDatabase) after every change, and with
+ *                            `ready` false when a reload starts; returns a
+ *                            function that stops listening
  */
 export function createCardDatabase({ storage = { load: loadMatcherDatabase, save: saveMatcherDatabase } } = {}) {
   const listeners = new Set();
@@ -210,6 +212,7 @@ export function createCardDatabase({ storage = { load: loadMatcherDatabase, save
     database.cards = [];
     database.source = 'bundled';
     database.updatedAt = null;
+    for (const listener of listeners) listener(database);
 
     let local = null;
     try {
@@ -262,9 +265,7 @@ export function createCardDatabase({ storage = { load: loadMatcherDatabase, save
 
   async function replaceFromFile(text) {
     const parsed = JSON.parse(text);
-    if (!parsed || !Array.isArray(parsed.cards) || parsed.cards.length === 0) {
-      throw new Error('The selected file does not look like a valid card-hashes.json database.');
-    }
+    if (!parsed || !Array.isArray(parsed.cards) || parsed.cards.length === 0) throw new Error(INVALID_DATABASE);
     await replace(parsed);
     return parsed.cards.length;
   }
@@ -275,6 +276,7 @@ export function createCardDatabase({ storage = { load: loadMatcherDatabase, save
       .filter((card) => card.id);
     const changes = await source.fetch({ knownCards, gridSize: database.gridSize, onProgress });
     const merged = mergeCardDatabaseUpdate({ gridSize: database.gridSize, cards: database.cards }, changes);
+    if (merged.cards.length === 0) throw new Error(INVALID_DATABASE);
     onMerged();
     await replace(merged);
     return { count: merged.cards.length, skippedCards: changes.skippedCards || 0 };

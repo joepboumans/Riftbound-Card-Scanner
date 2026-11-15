@@ -134,7 +134,7 @@ export default function App() {
     replacePendingList(refreshPendingList(pendingListRef.current, cards));
     setScannedCards((entries) => restoreCardEntries(entries, cards));
   }, [replacePendingList]);
-  useEffect(() => getCardDatabase().subscribe(({ cards }) => applyCardDatabase(cards)), [applyCardDatabase]);
+  useEffect(() => getCardDatabase().subscribe(({ cards, ready }) => { if (ready) applyCardDatabase(cards); }), [applyCardDatabase]);
 
   const [priceSyncBusy, setPriceSyncBusy] = useState(false);
   const [cardDatabaseBusy, setCardDatabaseBusy] = useState(false);
@@ -427,7 +427,7 @@ export default function App() {
           },
           onMerged: () => setUpdateTask({
             title: 'Updating card database',
-            detail: 'Importing the refreshed matcher database...',
+            detail: 'Importing the refreshed card database...',
             progress: 0.96,
           }),
         });

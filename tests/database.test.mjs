@@ -204,7 +204,8 @@ test('a card-hashes.json file replaces the card database; an invalid file is ref
 test('every change bumps the revision and reaches subscribers until they stop listening', async () => {
   const { database } = fixture(null, { gridSize: 16, cards: [card('rad-001')] });
   const revisions = [];
-  const stop = database.subscribe((current) => revisions.push(current.revision));
+  // A reload first says it started (not ready); count the changes.
+  const stop = database.subscribe((current) => { if (current.ready) revisions.push(current.revision); });
   await database.load();
   await database.replace({ gridSize: 16, cards: [card('rad-002')] });
   stop();
@@ -220,11 +221,11 @@ test('the matcher follows the card database: every change becomes its official r
   const Matcher = runtime.load('src/lib/cardMatcher.js').default;
   const matcher = new Matcher(database);
   assert.equal(matcher.ready, true, 'a matcher created after loading catches up');
-  assert.deepEqual(Array.from(matcher.references, (c) => c.id), ['rad-001']);
-  assert.ok(matcher.references[0].featureStats, 'references carry the prepared fingerprint');
+  assert.deepEqual(Array.from(matcher.officialReferences, (c) => c.id), ['rad-001']);
+  assert.ok(matcher.officialReferences[0].featureStats, 'references carry the prepared fingerprint');
   assert.equal(database.cards[0].featureStats, undefined, 'the card database keeps plain card records');
   database._apply({ gridSize: 1, cards: [card('rad-002')] });
-  assert.deepEqual(Array.from(matcher.references, (c) => c.id), ['rad-002']);
+  assert.deepEqual(Array.from(matcher.officialReferences, (c) => c.id), ['rad-002']);
   assert.equal(matcher.revision, database.revision);
   assert.equal(matcher.officialFeatures('rad-002').length, 3);
   assert.equal('cards' in matcher, false);
@@ -235,4 +236,24 @@ test('a local copy saved by an earlier version loads without the matcher fields 
   const { database } = fixture({ gridSize: 16, cards: [legacy] }, null, { fetchError: true });
   await database.load();
   assert.deepEqual(Object.keys(database.cards[0]).filter((key) => /Artwork|featureStats/.test(key)), []);
+});
+
+test('an update that would leave the card database empty is refused and saves nothing', async () => {
+  const { database, saved } = fixture(null, { gridSize: 16, cards: [] }, { fetchError: true });
+  await assert.rejects(database.load());
+  await assert.rejects(database.update(memoryUpdateSource({ gridSize: 16, cards: [{ id: 'rad-001', text: 'No features' }] })),
+    /does not look like a valid card-hashes.json/);
+  assert.equal(saved.length, 0);
+});
+
+test('while the card database reloads the matcher has no references, then follows the new cards', async () => {
+  const runtime = createRuntime({ mocks: { 'src/lib/indexedDB.js': { loadMatcherDatabase: async () => null, saveMatcherDatabase: async () => ({}) } },
+    globals: { fetch: async () => ({ ok: true, json: async () => ({ gridSize: 1, cards: [card('rad-002')] }) }) } });
+  const database = runtime.load('src/lib/cardDatabase.js').createCardDatabase();
+  database._apply({ gridSize: 1, cards: [card('rad-001')] });
+  const matcher = new (runtime.load('src/lib/cardMatcher.js').default)(database);
+  const seen = [];
+  database.subscribe(() => seen.push([matcher.ready, matcher.officialReferences.map((c) => c.id).join()]));
+  await database.load();
+  assert.deepEqual(JSON.parse(JSON.stringify(seen)), [[false, ''], [true, 'rad-002']]);
 });

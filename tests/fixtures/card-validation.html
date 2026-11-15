@@ -16,6 +16,7 @@ table { border-collapse:collapse; margin:20px 0; } td, th { padding:6px 14px; te
 <section><canvas id="preview"></canvas><pre id="report"></pre></section>
 <script type="module">
 import CardMatcher from '/src/lib/cardMatcher.js';
+import { createCardDatabase } from '/src/lib/cardDatabase.js';
 import YOLODetector from '/src/lib/yoloDetector.js';
 import { readCanvasQuality, isReliableScanResult } from '/src/lib/scanQuality.js';
 import { selectGuideDetection } from '/src/lib/scanGeometry.js';
@@ -69,7 +70,9 @@ document.querySelector('#run').onclick = async () => {
   let detector;
   try {
     const db = await (await fetch('/card-hashes.json')).json();
-    const matcher = new CardMatcher(); matcher._applyDatabase(db);
+    const cardDatabase = createCardDatabase({ storage: { load: async () => null, save: async () => ({}) } });
+    cardDatabase._apply(db);
+    const matcher = new CardMatcher(cardDatabase);
     const scenarios = ['dim-noise', 'warm', 'low-resolution', 'very-dark', 'shadow', 'glare'];
     for (const name of scenarios) report.scenarios[name] = statistics();
     const detectorCards = [];
